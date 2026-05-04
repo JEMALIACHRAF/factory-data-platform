@@ -18,7 +18,7 @@ WITH weekly_events AS (
         AVG(value_numeric)                  AS avg_value,
         AVG(quality)                        AS avg_quality
     FROM {{ ref('stg_iot_events') }}
-    WHERE event_ts >= CURRENT_DATE - INTERVAL '30 days'
+    WHERE event_ts >= '2024-01-01'
     GROUP BY 1, 2
 ),
 with_plant AS (

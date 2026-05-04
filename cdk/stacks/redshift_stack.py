@@ -2,6 +2,7 @@
 "RedshiftStack" – RDS PostgreSQL (remplace Redshift pour compatibilité compte)
 Free Tier eligible: db.t3.micro, 20GB storage
 SQL quasi-identique à Redshift pour le portfolio
+SSL désactivé via Parameter Group pour connexion Power BI
 """
 from aws_cdk import (
     Stack, RemovalPolicy, Duration, CfnOutput,
@@ -9,7 +10,6 @@ from aws_cdk import (
     aws_ec2 as ec2,
     aws_s3 as s3,
     aws_iam as iam,
-    aws_secretsmanager as sm,
 )
 from constructs import Construct
 
@@ -25,6 +25,18 @@ class RedshiftStack(Stack):
         **kwargs,
     ):
         super().__init__(scope, construct_id, **kwargs)
+
+        # ── Parameter Group – SSL désactivé ───────────────────────────────────
+        no_ssl_param_group = rds.ParameterGroup(
+            self, "NoSslParamGroup",
+            engine=rds.DatabaseInstanceEngine.postgres(
+                version=rds.PostgresEngineVersion.VER_16_6
+            ),
+            description="Disable SSL for dev/portfolio",
+            parameters={
+                "rds.force_ssl": "0"
+            },
+        )
 
         # ── Security Group ────────────────────────────────────────────────────
         self.sg = ec2.SecurityGroup(
@@ -55,7 +67,7 @@ class RedshiftStack(Stack):
             ),
             instance_type=ec2.InstanceType.of(
                 ec2.InstanceClass.T3,
-                ec2.InstanceSize.MICRO,       # Free Tier
+                ec2.InstanceSize.MICRO,
             ),
             vpc=vpc,
             vpc_subnets=ec2.SubnetSelection(
@@ -65,15 +77,16 @@ class RedshiftStack(Stack):
             database_name="factory_dw",
             credentials=rds.Credentials.from_secret(self.admin_secret),
             publicly_accessible=True,
-            allocated_storage=20,             # Free Tier max
+            allocated_storage=20,
             max_allocated_storage=20,
             deletion_protection=False,
             removal_policy=RemovalPolicy.DESTROY,
             backup_retention=Duration.days(1),
             multi_az=False,
+            parameter_group=no_ssl_param_group,  # ← SSL désactivé
         )
 
-        # ── IAM Role (garde la même interface pour les autres stacks) ─────────
+        # ── IAM Role ──────────────────────────────────────────────────────────
         self.redshift_role = iam.Role(
             self, "DBRole",
             role_name=f"factory-redshift-role-{env_name}",
