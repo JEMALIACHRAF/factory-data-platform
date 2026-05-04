@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+cdk-env/
+dist/
+build/
+
+# CDK
+cdk/cdk.out/
+cdk/.venv/
+
+# dbt
+factory_dbt/target/
+factory_dbt/dbt_packages/
+factory_dbt/logs/
+factory_dbt/.user.yml
+
+# AWS credentials - NE JAMAIS PUSHER
+.env
+*.env
+credentials
+.aws/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

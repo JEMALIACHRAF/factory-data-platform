@@ -1,0 +1,17 @@
+version: 2
+
+sources:
+  - name: factory
+    database: factory_dw
+    schema: factory
+    tables:
+      - name: fact_iot_events
+        description: "Événements IoT bruts depuis le pipeline Kafka→Glue"
+      - name: fact_machine_logs
+        description: "Logs machines usine"
+      - name: dim_plant
+        description: "Référentiel usines"
+      - name: dim_device
+        description: "Référentiel équipements"
+      - name: dim_date
+        description: "Table de dates"
