@@ -656,11 +656,7 @@ aws s3 rb s3://factory-scripts-prod-YOUR_ACCOUNT_ID --force
 
 ## Troubleshooting
 
-### `python3 not found` on Windows
-```bash
-# Edit cdk.json
-"app": "python app.py"   # use python, not python3
-```
+
 
 ### `cdk bootstrap` fails
 ```bash
@@ -702,6 +698,5 @@ aws logs get-log-events \
 
 ## Author
 
-**Achraf Jemali** — Data & AI Engineer  
-M2 DataScale @ Paris-Saclay | Apprenticeship @ Capgemini SogetiLabs  
+**Achraf Jemali** — Data & AI Engineer   
 [GitHub](https://github.com/JEMALIACHRAF) · [LinkedIn](https://linkedin.com/in/achraf-jemali)
