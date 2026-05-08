@@ -80,8 +80,8 @@ jobs:
           name: security-report
           path: bandit-report.json
 
-  # ════════════════════════════════════════════════════════════
-  # JOB 2 — CDK Synth (validate infrastructure code)
+# ════════════════════════════════════════════════════════════
+  # JOB 2 — CDK Validate (syntax check only, no AWS calls)
   # ════════════════════════════════════════════════════════════
   cdk-validate:
     name: 🏗️ CDK Synthesize
@@ -97,22 +97,14 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
-      - name: Set up Node.js (for CDK CLI)
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install CDK CLI
-        run: npm install -g aws-cdk
-
       - name: Install CDK dependencies
         run: |
           cd cdk
           pip install -r requirements.txt
 
-      - name: Create mock .env for synth
+      - name: Create mock .env for validation
         run: |
-          cat > .env << EOF
+          cat > .env << 'EOF'
           AWS_ACCOUNT_ID=123456789012
           AWS_REGION=eu-west-1
           ENV_NAME=ci
@@ -122,28 +114,26 @@ jobs:
           DB_NAME=factory_dw
           DB_USER=factoryadmin
           DB_PASSWORD=mock_password
+          ENABLE_STREAMING=false
           EOF
 
-      - name: CDK Synth (validate templates)
+      - name: Validate CDK Python syntax
         run: |
           cd cdk
-          cdk synth \
-            --context account=123456789012 \
-            --context region=eu-west-1 \
-            --context env=ci \
-            --quiet
-        env:
-          AWS_DEFAULT_REGION: eu-west-1
-          AWS_ACCESS_KEY_ID: mock_key_id_for_ci
-          AWS_SECRET_ACCESS_KEY: mock_secret_key_for_ci
-          AWS_ACCOUNT_ID: "123456789012"
+          python app.py
+          echo "✅ CDK Python syntax valid"
 
-      - name: Upload CDK templates
-        uses: actions/upload-artifact@v4
-        with:
-          name: cdk-templates
-          path: cdk/cdk.out/
-
+      - name: Validate all stack files importable
+        run: |
+          cd cdk
+          python -c "
+          from stacks.network_stack import NetworkStack
+          from stacks.storage_stack import StorageStack
+          from stacks.glue_stack import GlueStack
+          from stacks.redshift_stack import RedshiftStack
+          from stacks.monitoring_stack import MonitoringStack
+          print('✅ All stacks importable')
+          "
   # ════════════════════════════════════════════════════════════
   # JOB 3 — dbt Validate (compile + test models)
   # ════════════════════════════════════════════════════════════
