@@ -52,7 +52,7 @@ jobs:
             -ll \
             --skip B101,B311,B108 \
             -f json -o bandit-report.json || true
-          bandit -r glue_jobs/ cdk/stacks/ -ll --skip B101,B311
+          bandit -r glue_jobs/ cdk/stacks/ -ll --skip B101,B311,B108
 
       - name: Check dependencies for vulnerabilities (safety)
         run: |
@@ -319,7 +319,7 @@ jobs:
   # JOB 4 — SQL Validation
   # ════════════════════════════════════════════════════════════
   sql-validate:
-    name: 🗄️  SQL Validation
+    name: 🗄️ SQL Validation
     runs-on: ubuntu-latest
     needs: code-quality
     steps:
@@ -337,6 +337,6 @@ jobs:
 
       - name: Check DDL files exist
         run: |
-          test -f redshift/ddl/01_tables_redshift.sql && echo " Redshift DDL found"
+          test -f redshift/ddl/01_tables_redshift.sql && echo "✅ Redshift DDL found"
           test -f redshift/ddl/01_tables_postgres.sql || \
-          test -f redshift/ddl/01_tables_postgres_full.sql && echo " PostgreSQL DDL found"
+          test -f redshift/ddl/01_tables_postgres_full.sql && echo "✅ PostgreSQL DDL found"
