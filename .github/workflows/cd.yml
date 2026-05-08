@@ -1,9 +1,7 @@
 name: CD — Deploy to AWS
 
 on:
-  push:
-    branches: [main]        # Deploy uniquement sur main
-  workflow_dispatch:        # Déclenchement manuel possible
+  workflow_dispatch:        # Manuel seulement — jamais automatique
     inputs:
       environment:
         description: "Environment to deploy"
@@ -22,7 +20,7 @@ jobs:
   # JOB 1 — Deploy Infrastructure (CDK)
   # ════════════════════════════════════════════════════════════
   deploy-infrastructure:
-    name:  Deploy AWS Infrastructure
+    name: 🚀 Deploy AWS Infrastructure
     runs-on: ubuntu-latest
     environment: production       # require manual approval in GitHub
     outputs:
@@ -48,7 +46,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "22"
 
       - name: Install CDK CLI
         run: npm install -g aws-cdk
@@ -70,6 +68,7 @@ jobs:
           DB_NAME=factory_dw
           DB_USER=factoryadmin
           DB_PASSWORD=placeholder
+          ENABLE_STREAMING=false
           EOF
 
       - name: CDK Bootstrap (idempotent)
@@ -129,7 +128,7 @@ jobs:
   # JOB 2 — Run Database Migrations
   # ════════════════════════════════════════════════════════════
   run-migrations:
-    name:  Run DB Migrations
+    name: 🗄️ Run DB Migrations
     runs-on: ubuntu-latest
     needs: deploy-infrastructure
     env:
@@ -173,7 +172,7 @@ jobs:
             -d factory_dw \
             -f redshift/ddl/01_tables_postgres_full.sql \
             --set ON_ERROR_STOP=off
-          echo " Migrations completed"
+          echo "✅ Migrations completed"
 
       - name: Verify tables exist
         run: |
@@ -189,7 +188,7 @@ jobs:
   # JOB 3 — Run dbt Transformations
   # ════════════════════════════════════════════════════════════
   run-dbt:
-    name:  Run dbt Transformations
+    name: 🔄 Run dbt Transformations
     runs-on: ubuntu-latest
     needs: [deploy-infrastructure, run-migrations]
     env:
@@ -254,7 +253,7 @@ jobs:
           cd cdk/factory_dbt
           dbt test --target ${{ env.ENV_NAME }}
 
-      - name: dbt docs generate + publish
+      - name: dbt docs generate
         run: |
           cd cdk/factory_dbt
           dbt docs generate --target ${{ env.ENV_NAME }}
@@ -269,7 +268,7 @@ jobs:
   # JOB 4 — Smoke Tests
   # ════════════════════════════════════════════════════════════
   smoke-tests:
-    name:  Smoke Tests
+    name: 🧪 Smoke Tests
     runs-on: ubuntu-latest
     needs: [deploy-infrastructure, run-dbt]
     env:
@@ -316,7 +315,7 @@ jobs:
               sslmode="disable"
           )
           cur = conn.cursor()
-          
+
           tests_passed = 0
           tests_failed = 0
 
@@ -325,40 +324,34 @@ jobs:
               cur.execute(query)
               result = cur.fetchone()[0]
               if result >= expected_min:
-                  print(f" {name}: {result} rows (expected >= {expected_min})")
+                  print(f"✅ {name}: {result} rows (expected >= {expected_min})")
                   tests_passed += 1
               else:
-                  print(f" {name}: {result} rows (expected >= {expected_min})")
+                  print(f"❌ {name}: {result} rows (expected >= {expected_min})")
                   tests_failed += 1
 
-          # Test 1: dimensions populated
           test("dim_plant", "SELECT COUNT(*) FROM factory.dim_plant", 3)
           test("dim_device", "SELECT COUNT(*) FROM factory.dim_device", 3)
           test("dim_date", "SELECT COUNT(*) FROM factory.dim_date", 1)
-
-          # Test 2: fact tables populated
           test("fact_iot_events", "SELECT COUNT(*) FROM factory.fact_iot_events", 1)
-
-          # Test 3: dbt models created
           test("stg_iot_events view",
                "SELECT COUNT(*) FROM information_schema.views WHERE table_name='stg_iot_events'", 1)
           test("weekly_plant_report",
                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='weekly_plant_report'", 1)
 
-          # Test 4: no nulls on critical columns
           cur.execute("SELECT COUNT(*) FROM factory.fact_iot_events WHERE event_ts IS NULL")
           null_count = cur.fetchone()[0]
           if null_count == 0:
-              print(" No null timestamps in fact_iot_events")
+              print("✅ No null timestamps in fact_iot_events")
               tests_passed += 1
           else:
-              print(f" Found {null_count} null timestamps!")
+              print(f"❌ Found {null_count} null timestamps!")
               tests_failed += 1
 
           conn.close()
           print(f"\n{'='*40}")
           print(f"Results: {tests_passed} passed, {tests_failed} failed")
-          
+
           if tests_failed > 0:
               sys.exit(1)
           EOF
@@ -370,26 +363,26 @@ jobs:
             --region ${{ env.AWS_REGION }} \
             --query "Job.Name" \
             --output text
-          echo " Glue jobs verified"
+          echo "✅ Glue jobs verified"
 
       - name: Verify S3 buckets accessible
         run: |
           aws s3 ls s3://factory-raw-${{ env.ENV_NAME }}-${{ secrets.AWS_ACCOUNT_ID }}/ \
             --region ${{ env.AWS_REGION }}
-          echo " S3 buckets accessible"
+          echo "✅ S3 buckets accessible"
 
   # ════════════════════════════════════════════════════════════
-  # JOB 5 — Notify deployment result
+  # JOB 5 — Deployment Summary
   # ════════════════════════════════════════════════════════════
   notify:
-    name:  Notify Deployment
+    name: 📢 Deployment Summary
     runs-on: ubuntu-latest
     needs: [deploy-infrastructure, run-migrations, run-dbt, smoke-tests]
     if: always()
     steps:
       - name: Deployment Summary
         run: |
-          echo "##  Factory Data Platform — Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🏭 Factory Data Platform — Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
@@ -401,3 +394,4 @@ jobs:
           echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
           echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
