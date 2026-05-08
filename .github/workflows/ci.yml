@@ -100,7 +100,7 @@ jobs:
       - name: Set up Node.js (for CDK CLI)
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "22"
 
       - name: Install CDK CLI
         run: npm install -g aws-cdk
@@ -133,9 +133,10 @@ jobs:
             --context env=ci \
             --quiet
         env:
-          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
-          AWS_ACCESS_KEY_ID: mock_key
-          AWS_SECRET_ACCESS_KEY: mock_secret
+          AWS_DEFAULT_REGION: eu-west-1
+          AWS_ACCESS_KEY_ID: mock_key_id_for_ci
+          AWS_SECRET_ACCESS_KEY: mock_secret_key_for_ci
+          AWS_ACCOUNT_ID: "123456789012"
 
       - name: Upload CDK templates
         uses: actions/upload-artifact@v4
