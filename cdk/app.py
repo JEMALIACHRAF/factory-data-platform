@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 import aws_cdk as cdk
 from stacks.network_stack import NetworkStack
 from stacks.storage_stack import StorageStack
-from stacks.streaming_stack import StreamingStack
 from stacks.glue_stack import GlueStack
 from stacks.redshift_stack import RedshiftStack
 from stacks.monitoring_stack import MonitoringStack
@@ -18,10 +17,12 @@ app = cdk.App()
 account = (
     app.node.try_get_context("account")
     or os.getenv("AWS_ACCOUNT_ID")
+    or os.getenv("CDK_DEFAULT_ACCOUNT")
 )
 region = (
     app.node.try_get_context("region")
     or os.getenv("AWS_REGION")
+    or os.getenv("CDK_DEFAULT_REGION")
     or "eu-west-1"
 )
 env_name = (
@@ -35,19 +36,37 @@ alert_email = (
     or "data-team@company.com"
 )
 
+# Enable Streaming stack only when explicitly requested
+# MSK (Kafka) requires account subscription — skip in CI
+enable_streaming = (
+    app.node.try_get_context("enable_streaming") == "true"
+    or os.getenv("ENABLE_STREAMING", "false").lower() == "true"
+)
+
 env = cdk.Environment(account=account, region=region)
 
-network = NetworkStack(app, f"FactoryNetwork-{env_name}", env=env, env_name=env_name)
-
-storage = StorageStack(app, f"FactoryStorage-{env_name}", env=env, env_name=env_name)
-storage.add_dependency(network)
-
-streaming = StreamingStack(
-    app, f"FactoryStreaming-{env_name}",
-    vpc=network.vpc,
+network = NetworkStack(
+    app, f"FactoryNetwork-{env_name}",
     env=env, env_name=env_name,
 )
-streaming.add_dependency(storage)
+
+storage = StorageStack(
+    app, f"FactoryStorage-{env_name}",
+    env=env, env_name=env_name,
+)
+storage.add_dependency(network)
+
+# Streaming stack (MSK Kafka) — disabled by default
+# Enable with: --context enable_streaming=true
+# or ENABLE_STREAMING=true in .env
+if enable_streaming:
+    from stacks.streaming_stack import StreamingStack
+    streaming = StreamingStack(
+        app, f"FactoryStreaming-{env_name}",
+        vpc=network.vpc,
+        env=env, env_name=env_name,
+    )
+    streaming.add_dependency(storage)
 
 glue = GlueStack(
     app, f"FactoryGlue-{env_name}",
