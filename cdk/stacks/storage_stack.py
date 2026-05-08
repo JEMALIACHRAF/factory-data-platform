@@ -2,11 +2,11 @@
 StorageStack – S3 buckets (raw, processed, scripts) + Glue Data Catalog
 Production-grade: encryption, lifecycle, versioning, access logging
 """
+
 from aws_cdk import (
     Stack, RemovalPolicy, Duration, Tags,
     aws_s3 as s3,
     aws_glue as glue,
-    aws_iam as iam,
     aws_kms as kms,
 )
 from constructs import Construct

@@ -1,8 +1,7 @@
 from aws_cdk import (
-    Stack, Duration,
+    Stack,
     aws_ec2 as ec2,
     aws_msk as msk,
-    aws_iam as iam,
 )
 from constructs import Construct
 

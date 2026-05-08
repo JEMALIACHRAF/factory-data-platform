@@ -1,0 +1,14 @@
+[flake8]
+max-line-length = 120
+exclude =
+    cdk/.venv,
+    cdk/cdk.out,
+    **/__pycache__
+per-file-ignores =
+    # Glue imports not available locally
+    glue_jobs/*.py: F401,F403,E128
+    # CDK stacks - continuation lines style
+    cdk/stacks/*.py: E128,E124
+ignore =
+    W292,
+    E712
