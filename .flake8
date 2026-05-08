@@ -6,9 +6,10 @@ exclude =
     **/__pycache__
 per-file-ignores =
     glue_jobs/*.py: F401,F403,E128,E241,W503,E302
-    cdk/stacks/*.py: E128,E124,F401
+    cdk/stacks/*.py: E128,E124,F401,E302
 ignore =
     W292,
     E712,
     E241,
-    W503
+    W503,
+    E302
