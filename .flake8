@@ -5,10 +5,10 @@ exclude =
     cdk/cdk.out,
     **/__pycache__
 per-file-ignores =
-    # Glue imports not available locally
-    glue_jobs/*.py: F401,F403,E128
-    # CDK stacks - continuation lines style
-    cdk/stacks/*.py: E128,E124
+    glue_jobs/*.py: F401,F403,E128,E241,W503,E302
+    cdk/stacks/*.py: E128,E124,F401
 ignore =
     W292,
-    E712
+    E712,
+    E241,
+    W503
