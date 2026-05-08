@@ -1,84 +1,108 @@
 # 🏭 Factory Data Platform
 
-> Production-grade IoT Data Pipeline on AWS — Kafka → S3 → Glue PySpark → PostgreSQL/Redshift  
-> Infrastructure as Code with AWS CDK Python | dbt for SQL transformations
+> **Production-grade IoT Data Pipeline on AWS**  
+> Real-time factory sensor data: ingestion → processing → analytics → dashboard
 
-[![AWS CDK](https://img.shields.io/badge/AWS_CDK-Python-orange)](https://aws.amazon.com/cdk/)
-[![PySpark](https://img.shields.io/badge/PySpark-Glue_4.0-red)](https://aws.amazon.com/glue/)
-[![dbt](https://img.shields.io/badge/dbt-PostgreSQL-blue)](https://www.getdbt.com/)
-[![Python](https://img.shields.io/badge/Python-3.10+-green)](https://python.org)
+[![CI](https://github.com/JEMALIACHRAF/factory-data-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/JEMALIACHRAF/factory-data-platform/actions/workflows/ci.yml)
+[![CD](https://github.com/JEMALIACHRAF/factory-data-platform/actions/workflows/cd.yml/badge.svg)](https://github.com/JEMALIACHRAF/factory-data-platform/actions/workflows/cd.yml)
+[![Python](https://img.shields.io/badge/Python-3.11-blue)](https://python.org)
+[![AWS CDK](https://img.shields.io/badge/AWS_CDK-2.x-orange)](https://aws.amazon.com/cdk/)
+[![dbt](https://img.shields.io/badge/dbt-1.11-red)](https://getdbt.com)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 ---
 
 ## 📋 Table of Contents
 
-1. [Architecture](#architecture)
-2. [What This Project Does](#what-this-project-does)
-3. [Project Structure](#project-structure)
-4. [Prerequisites](#prerequisites)
-5. [AWS Account Setup](#aws-account-setup)
-6. [Local Environment Setup](#local-environment-setup)
-7. [Deploy to AWS (Step by Step)](#deploy-to-aws-step-by-step)
-8. [Initialize the Database](#initialize-the-database)
-9. [Run dbt Transformations](#run-dbt-transformations)
-10. [Test the Pipeline](#test-the-pipeline)
-11. [External Tools Used](#external-tools-used)
-12. [Performance Optimizations](#performance-optimizations)
-13. [Cost Estimate](#cost-estimate)
-14. [Destroy Resources](#destroy-resources)
-15. [Troubleshooting](#troubleshooting)
+1. [Overview](#overview)
+2. [Architecture](#architecture)
+3. [Tech Stack](#tech-stack)
+4. [Project Structure](#project-structure)
+5. [Quick Start](#quick-start)
+6. [Prerequisites](#prerequisites)
+7. [AWS Account Setup](#aws-account-setup)
+8. [Local Setup](#local-setup)
+9. [Deploy to AWS](#deploy-to-aws)
+10. [Initialize Database](#initialize-database)
+11. [Run dbt Transformations](#run-dbt-transformations)
+12. [Connect Power BI](#connect-power-bi)
+13. [CI/CD Pipeline](#cicd-pipeline)
+14. [Performance Optimizations](#performance-optimizations)
+15. [Cost Management](#cost-management)
+16. [Troubleshooting](#troubleshooting)
+17. [Author](#author)
+
+---
+
+## Overview
+
+This platform processes real-time IoT data from industrial factory machines across multiple plants. It demonstrates a complete **modern data stack** used in production environments.
+
+**Business context:** 3 factories (Lyon, Paris, Berlin) generate thousands of sensor events per second — temperature, vibration, pressure. The platform captures, processes, and delivers clean analytical data to business dashboards.
+
+**Key metrics achieved:**
+- Weekly report query time: **45s → 17s (-62%)** via Redshift optimization
+- Data latency: **< 15 minutes** from sensor to dashboard
+- Data quality: **automatic quarantine** of corrupt/invalid records
+- Exactly-once processing via Spark checkpointing
 
 ---
 
 ## Architecture
 
 ```
-IoT Devices / Factory Machines
-           │
-           ▼
-    [MSK Kafka Cluster]
-    Topics: factory-iot-events
-           │
-           │ Kafka S3 Sink Connector (5-min batches)
-           ▼
-    [S3 Raw Bucket]  ←── factory-raw-prod-{account}
-    topics/factory-iot-events/year=YYYY/month=MM/day=DD/hour=HH/
-           │
-           │ AWS Glue PySpark Jobs (every 15 min)
-           ▼
-    [S3 Processed Bucket]  ←── factory-processed-prod-{account}
-    processed/iot_events/ (Parquet + Snappy, Hive partitioned)
-           │
-           │ Glue Crawler (daily) → Glue Data Catalog
-           │ COPY command
-           ▼
-    [Redshift / RDS PostgreSQL]
-    Star schema: fact_iot_events, fact_machine_logs
-    dim_device, dim_plant, dim_date
-           │
-           │ dbt transformations
-           ▼
-    [Reporting Layer]
-    mv_hourly_plant_kpis, weekly_plant_report
-           │
-           ▼
-    BI Dashboards / Weekly Reports
+IoT Devices / PLCs / Sensors
+         │
+         ▼
+  [MSK Kafka]  ──── Kafka S3 Sink Connector ────►  [S3 Raw]
+  (Streaming)         (5-min micro-batches)        landing zone
+                                                       │
+                                              ┌────────┘
+                                              ▼
+                                    [AWS Glue PySpark]
+                                    ┌──────────────────┐
+                                    │ log_processor    │  hourly
+                                    │ iot_transformer  │  15 min
+                                    └────────┬─────────┘
+                                             │
+                                    [S3 Processed]
+                                    Parquet + Snappy
+                                    Hive partitioned
+                                             │
+                                    [Glue Crawler]
+                                    [Glue Data Catalog]
+                                             │
+                                    [RDS PostgreSQL /
+                                     Redshift]
+                                    Star schema DW
+                                             │
+                                       [dbt]
+                                    Transformations
+                                    Tests + Docs
+                                             │
+                                    [Power BI Dashboard]
+                                    Plant KPIs
+                                    Machine Health
+                                    Weekly Reports
 ```
 
 ---
 
-## What This Project Does
+## Tech Stack
 
-This platform ingests real-time IoT sensor data from factory machines, processes it through a distributed pipeline, and delivers clean analytical data for business reporting.
-
-**Key capabilities:**
-- Ingests 10,000+ IoT events/second via Kafka
-- Processes data in near real-time (15-min latency) using PySpark on AWS Glue
-- Enforces data quality — corrupt records quarantined, invalid records isolated
-- Deduplicates events using Spark window functions + job bookmarks
-- Stores data as partitioned Parquet (10-50x faster queries than CSV)
-- Delivers weekly factory performance reports with 62% faster query time vs naive SQL
-- Full Infrastructure as Code — redeploy entire stack in 15 minutes
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| **Ingestion** | Apache Kafka (MSK) | Real-time event streaming |
+| **Storage** | Amazon S3 | Data lake (raw + processed) |
+| **Processing** | PySpark on AWS Glue 4.0 | Distributed ETL |
+| **Warehouse** | RDS PostgreSQL / Redshift | Analytical queries |
+| **Transformation** | dbt 1.11 | SQL models, tests, lineage |
+| **Visualization** | Power BI Desktop | Business dashboards |
+| **IaC** | AWS CDK Python | Infrastructure as Code |
+| **CI/CD** | GitHub Actions | Automated testing & deployment |
+| **Format** | Parquet + Snappy | Columnar storage |
+| **Security** | AWS KMS + Secrets Manager | Encryption & secrets |
+| **Monitoring** | CloudWatch + SNS | Alerts & dashboards |
 
 ---
 
@@ -86,617 +110,603 @@ This platform ingests real-time IoT sensor data from factory machines, processes
 
 ```
 factory-data-platform/
-├── cdk/                              # AWS CDK Infrastructure
-│   ├── app.py                        # CDK entry point
-│   ├── cdk.json                      # CDK configuration
-│   ├── requirements.txt              # CDK Python dependencies
-│   └── stacks/
-│       ├── network_stack.py          # VPC, subnets, NAT Gateway
-│       ├── storage_stack.py          # S3 buckets, KMS key, Glue catalog
-│       ├── glue_stack.py             # Glue jobs, crawlers, triggers
-│       ├── redshift_stack.py         # RDS PostgreSQL (or Redshift)
-│       ├── streaming_stack.py        # MSK Kafka cluster
-│       └── monitoring_stack.py       # CloudWatch alarms, dashboards
 │
-├── glue_jobs/                        # PySpark ETL scripts
-│   ├── log_processor.py              # Batch: raw logs → Parquet
-│   └── iot_transformer.py            # Streaming: IoT events → enriched Parquet
+├── .github/workflows/
+│   ├── ci.yml              # CI: lint, security, CDK synth, dbt test
+│   └── cd.yml              # CD: deploy AWS, migrations, dbt run, smoke tests
+│
+├── cdk/                    # AWS CDK Infrastructure (Python)
+│   ├── app.py              # Entry point — reads .env
+│   ├── cdk.json            # CDK configuration
+│   ├── requirements.txt    # Python dependencies
+│   └── stacks/
+│       ├── network_stack.py    # VPC, subnets, NAT Gateway
+│       ├── storage_stack.py    # S3 buckets, KMS, Glue catalog
+│       ├── glue_stack.py       # Glue jobs, crawlers, triggers
+│       ├── redshift_stack.py   # RDS PostgreSQL / Redshift
+│       ├── streaming_stack.py  # MSK Kafka cluster
+│       └── monitoring_stack.py # CloudWatch alarms, dashboard
+│
+├── glue_jobs/              # PySpark ETL Scripts
+│   ├── log_processor.py    # Batch: JSON logs → Parquet
+│   └── iot_transformer.py  # Streaming: IoT events → enriched Parquet
 │
 ├── redshift/
 │   ├── ddl/
-│   │   ├── 01_tables_redshift.sql    # Production DDL (Redshift)
-│   │   └── 01_tables_postgres.sql    # Dev/test DDL (PostgreSQL)
+│   │   ├── 01_tables_redshift.sql       # Production DDL (Redshift)
+│   │   ├── 01_tables_postgres.sql       # Dev DDL (PostgreSQL)
+│   │   └── 01_tables_postgres_full.sql  # Dev DDL + seed data
 │   └── queries/
-│       └── weekly_report_optimized.sql  # Before/after 62% perf gain
+│       └── weekly_report_optimized.sql  # -62% optimization (before/after)
 │
-├── factory_dbt/                      # dbt project
+├── cdk/factory_dbt/        # dbt Project
 │   ├── models/
 │   │   ├── staging/
-│   │   │   ├── stg_iot_events.sql    # Clean + standardize IoT events
-│   │   │   ├── sources.yml           # Source declarations
-│   │   │   └── schema.yml            # Column tests (not_null, unique...)
+│   │   │   ├── stg_iot_events.sql       # Clean IoT events
+│   │   │   ├── sources.yml              # Source declarations
+│   │   │   └── schema.yml               # Column tests
 │   │   └── marts/
-│   │       ├── weekly_plant_report.sql   # Weekly KPIs per plant
-│   │       └── fact_iot_incremental.sql  # Incremental load model
-│   ├── dbt_project.yml
-│   └── profiles.yml                  # DB connection config
+│   │       ├── weekly_plant_report.sql  # Weekly KPIs per plant
+│   │       └── fact_iot_incremental.sql # Incremental load model
+│   └── dbt_project.yml
 │
 ├── kafka/
-│   └── s3_sink_connector.json        # Kafka Connect S3 Sink config
+│   └── s3_sink_connector.json  # Kafka Connect S3 Sink config
 │
+├── .env.example            # Environment variables template
+├── .flake8                 # Python linting config
+├── load_env.ps1            # Windows: load .env into session
 └── README.md
+```
+
+---
+
+## Quick Start
+
+> ⚡ For experienced users — full guide below
+
+```bash
+# 1. Clone
+git clone https://github.com/JEMALIACHRAF/factory-data-platform.git
+cd factory-data-platform
+
+# 2. Setup environment
+cp .env.example .env
+# Edit .env with your AWS credentials
+
+# 3. Install dependencies
+cd cdk
+pip install -r requirements.txt
+npm install -g aws-cdk
+
+# 4. Deploy to AWS
+cdk bootstrap aws://YOUR_ACCOUNT_ID/eu-west-1
+cdk deploy FactoryNetwork-prod FactoryStorage-prod FactoryGlue-prod FactoryRedshift-prod FactoryMonitoring-prod
+
+# 5. Initialize database (in DBeaver)
+# Run: redshift/ddl/01_tables_postgres_full.sql
+
+# 6. Run dbt
+cd factory_dbt
+dbt run && dbt test
 ```
 
 ---
 
 ## Prerequisites
 
-### Required accounts
-| Tool | Purpose | Link |
-|------|---------|------|
-| AWS Account | Cloud infrastructure | [aws.amazon.com](https://aws.amazon.com) |
-| GitHub Account | Source control | [github.com](https://github.com) |
+### Tools to install
 
-### Required software
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Python | 3.10+ | CDK + dbt |
-| Node.js | 18+ | AWS CDK CLI |
-| Git | Any | Version control |
-| DBeaver | Latest | SQL GUI client |
+| Tool | Install command / Link |
+|------|----------------------|
+| Python 3.10+ | [python.org](https://python.org) |
+| Node.js 18+ | [nodejs.org](https://nodejs.org) |
+| AWS CLI | `winget install Amazon.AWSCLI` |
+| AWS CDK | `npm install -g aws-cdk` |
+| Git | [git-scm.com](https://git-scm.com) |
+| DBeaver Community | [dbeaver.io/download](https://dbeaver.io/download/) |
+| Power BI Desktop | [powerbi.microsoft.com/desktop](https://powerbi.microsoft.com/desktop) |
 
 ---
 
 ## AWS Account Setup
 
-### Step 1 — Create an AWS Account
-Go to [https://aws.amazon.com](https://aws.amazon.com) → **Create an AWS Account**
+### 1. Create IAM Admin User (never use root)
 
-### Step 2 — Create an IAM Admin User (do NOT use root)
+```
+AWS Console → IAM → Users → Create user
+  Username: achraf-admin
+  Permissions: AdministratorAccess
 
-1. Go to **AWS Console → IAM → Users → Create user**
-2. Username: `achraf-admin`
-3. Attach policy: `AdministratorAccess`
-4. Go to **Security credentials → Create access key**
-5. Use case: `CLI`
-6. **Download the CSV** — you will only see the secret key once
-
-### Step 3 — Install AWS CLI
-
-**Windows:**
-```powershell
-winget install Amazon.AWSCLI
+Security credentials tab → Create access key
+  Use case: CLI
+  → Download CSV immediately (secret shown only once)
 ```
 
-**macOS:**
-```bash
-brew install awscli
-```
-
-**Verify:**
-```bash
-aws --version
-```
-
-### Step 4 — Configure AWS CLI
+### 2. Configure AWS CLI
 
 ```bash
 aws configure
 ```
 
 ```
-AWS Access Key ID:     AKIA...        (from your CSV)
-AWS Secret Access Key: xxxx...        (from your CSV)
-Default region name:   eu-west-1
-Default output format: json
+AWS Access Key ID:     AKIA...
+AWS Secret Access Key: xxxx...
+Default region:        eu-west-1
+Output format:         json
 ```
 
-**Verify:**
+### 3. Verify
+
 ```bash
 aws sts get-caller-identity
-```
-
-Expected output:
-```json
-{
-    "UserId": "AIDAXXXXXXXXXX",
-    "Account": "302862751502",
-    "Arn": "arn:aws:iam::302862751502:user/achraf-admin"
-}
+# Must return your Account ID
 ```
 
 ---
 
-## Local Environment Setup
+## Local Setup
 
-### Step 1 — Install Node.js
-
-Download from [https://nodejs.org](https://nodejs.org) (LTS version)
-
-### Step 2 — Install AWS CDK
-
-```bash
-npm install -g aws-cdk
-cdk --version
-```
-
-### Step 3 — Clone the repository
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/JEMALIACHRAF/factory-data-platform.git
 cd factory-data-platform
 ```
 
-### Step 4 — Create Python virtual environment
+### 2. Configure environment variables
 
-```powershell
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your values:
+```env
+AWS_ACCOUNT_ID=YOUR_ACCOUNT_ID
+AWS_REGION=eu-west-1
+ENV_NAME=prod
+ALERT_EMAIL=your@email.com
+
+# Fill these after RDS deployment (Step: Get RDS credentials)
+DB_HOST=YOUR_RDS_ENDPOINT
+DB_PORT=5432
+DB_NAME=factory_dw
+DB_USER=factoryadmin
+DB_PASSWORD=YOUR_PASSWORD
+```
+
+> ⚠️ `.env` is in `.gitignore` — **never commit it**
+
+### 3. Python virtual environment
+
+```bash
 # Windows
 cd cdk
 python -m venv .venv
 .venv\Scripts\activate
 
-# macOS/Linux
+# macOS / Linux
 python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### Step 5 — Install CDK dependencies
+### 4. Install dependencies
 
 ```bash
 pip install -r requirements.txt
+pip install dbt-postgres python-dotenv
+npm install -g aws-cdk
 ```
 
-### Step 6 — Verify setup
+### 5. Verify setup
 
 ```bash
 python app.py
+# No output = success (CDK reads .env correctly)
 ```
-
-No output = success. If you see errors, check that all stack files exist in `cdk/stacks/`.
 
 ---
 
-## Deploy to AWS (Step by Step)
+## Deploy to AWS
 
-> ⚠️ **Cost warning:** Deploying this stack creates billable AWS resources.  
-> Estimated cost: ~$1.50/day (NAT Gateway $1.08 + RDS $0.48).  
-> **Always destroy resources when done testing** (see [Destroy Resources](#destroy-resources)).
+> ⚠️ **Cost warning:** ~$1.56/day while running.  
+> **Always destroy after testing.** See [Cost Management](#cost-management).
 
-### Step 1 — Get your AWS Account ID
-
-```bash
-aws sts get-caller-identity --query Account --output text
-# Output: 302862751502
-```
-
-### Step 2 — Bootstrap CDK (one time only per account/region)
+### Step 1 — Bootstrap (one-time per account/region)
 
 ```bash
 cdk bootstrap aws://YOUR_ACCOUNT_ID/eu-west-1
 ```
 
-Expected: `✅ Environment aws://xxx/eu-west-1 bootstrapped`
+Expected: `✅ Environment bootstrapped`
 
-This creates the `CDKToolkit` CloudFormation stack with IAM roles and an S3 bucket that CDK needs to deploy.
-
-### Step 3 — Update cdk.json
-
-Open `cdk/cdk.json` and update:
-```json
-{
-  "app": "python app.py",
-  "context": {
-    "account": "YOUR_ACCOUNT_ID",
-    "region": "eu-west-1",
-    "env": "prod",
-    "alert_email": "your@email.com"
-  }
-}
-```
-
-### Step 4 — Deploy stacks in order
-
-**Network (VPC):**
-```bash
-cdk deploy FactoryNetwork-prod --context account=YOUR_ACCOUNT_ID --context env=prod
-```
-Creates: VPC `10.0.0.0/16`, 2 public subnets, 2 private subnets, NAT Gateway
-
-**Storage (S3 + KMS):**
-```bash
-cdk deploy FactoryStorage-prod --context account=YOUR_ACCOUNT_ID --context env=prod
-```
-Creates: 3 S3 buckets (raw/processed/scripts), KMS encryption key, Glue Data Catalog
-
-**Glue Jobs:**
-```bash
-cdk deploy FactoryGlue-prod --context account=YOUR_ACCOUNT_ID --context env=prod
-```
-Creates: 2 PySpark jobs, Glue crawler, CRON triggers, uploads scripts to S3
-
-**Database:**
-```bash
-cdk deploy FactoryRedshift-prod --context account=YOUR_ACCOUNT_ID --context env=prod
-```
-Creates: RDS PostgreSQL 16.6 (t3.micro), Secrets Manager, IAM role (~10 min)
-
-**Monitoring:**
-```bash
-cdk deploy FactoryMonitoring-prod --context account=YOUR_ACCOUNT_ID --context env=prod
-```
-Creates: CloudWatch alarms, SNS alerts, dashboard
-
-### Step 5 — Verify deployment
-
-Go to **AWS Console → CloudFormation → Stacks** (region: eu-west-1)
-
-You should see:
-```
-✅ CDKToolkit
-✅ FactoryNetwork-prod
-✅ FactoryStorage-prod
-✅ FactoryGlue-prod
-✅ FactoryRedshift-prod
-✅ FactoryMonitoring-prod
-```
-
----
-
-## Initialize the Database
-
-### Step 1 — Install DBeaver
-
-Download from [https://dbeaver.io/download/](https://dbeaver.io/download/) (Community Edition, free)
-
-### Step 2 — Get database credentials
+### Step 2 — Deploy stacks
 
 ```bash
-aws secretsmanager get-secret-value \
-  --secret-id "factory/postgres/admin-prod" \
-  --region eu-west-1 \
-  --query SecretString \
-  --output text
+cdk deploy FactoryNetwork-prod \
+           FactoryStorage-prod \
+           FactoryGlue-prod \
+           FactoryRedshift-prod \
+           FactoryMonitoring-prod
 ```
 
-Note the `username` and `password` from the JSON output.
+Type `y` when prompted for IAM/security changes. Duration: ~20 min.
 
-### Step 3 — Get database endpoint
+### Step 3 — Get RDS credentials
 
 ```bash
+# Get endpoint
 aws cloudformation describe-stacks \
   --stack-name FactoryRedshift-prod \
   --region eu-west-1 \
   --query "Stacks[0].Outputs[?OutputKey=='DBEndpoint'].OutputValue" \
   --output text
+
+# Get password (Windows CMD — use ^ not backtick)
+aws secretsmanager get-secret-value ^
+  --secret-id "factory/postgres/admin-prod" ^
+  --region eu-west-1 ^
+  --query SecretString ^
+  --output text
 ```
 
-### Step 4 — Connect DBeaver
+Update your `.env` with these values.
 
-1. Click **New Database Connection** → **PostgreSQL**
-2. Fill in:
+### What gets deployed
+
+| Stack | AWS Resources |
+|-------|--------------|
+| `FactoryNetwork-prod` | VPC 10.0.0.0/16, 4 subnets, NAT Gateway |
+| `FactoryStorage-prod` | 3 S3 buckets, KMS key, Glue Data Catalog |
+| `FactoryGlue-prod` | 2 PySpark jobs, crawler, CRON triggers |
+| `FactoryRedshift-prod` | RDS PostgreSQL 16.6, Secrets Manager, IAM role |
+| `FactoryMonitoring-prod` | 4 CloudWatch alarms, SNS alerts, dashboard |
+
+---
+
+## Initialize Database
+
+### Connect with DBeaver
+
 ```
-Host:     [endpoint from Step 3]
-Port:     5432
-Database: factory_dw
-Username: factoryadmin
-Password: [password from Step 2]
+New Connection → PostgreSQL
+  Host:     YOUR_RDS_ENDPOINT
+  Port:     5432
+  Database: factory_dw
+  Username: factoryadmin
+  Password: YOUR_PASSWORD
 ```
-3. Click **Test Connection** → should say **Connected**
-4. Click **Finish**
 
-### Step 5 — Run DDL
+Click **Test Connection** → **Connected ✅** → **Finish**
 
-1. In DBeaver: **SQL Editor → New SQL Script**
-2. Open file: `redshift/ddl/01_tables_postgres.sql`
-3. Select all → **Ctrl+Alt+X** (Execute All Statements)
+### Run DDL
 
-This creates:
-- Schemas: `factory`, `reporting`, `staging`
-- Dimension tables: `dim_plant`, `dim_device`, `dim_date`
-- Fact tables: `fact_iot_events`, `fact_machine_logs`
-- Staging tables: `stg_iot_events`, `stg_machine_logs`
-- Materialized view: `reporting.mv_hourly_plant_kpis`
-- Sample data: 3 plants, 3 devices, 5 IoT events
+1. **SQL Editor → Open File** → `redshift/ddl/01_tables_postgres_full.sql`
+2. **Ctrl+Alt+X** (Execute All Statements)
 
-### Step 6 — Verify tables
+### Verify tables
 
 ```sql
-SELECT table_schema, table_name
-FROM information_schema.tables
-WHERE table_schema IN ('factory', 'staging', 'reporting')
-ORDER BY table_schema, table_name;
+SELECT 'dim_plant' AS t, COUNT(*) FROM factory.dim_plant
+UNION ALL SELECT 'dim_device',      COUNT(*) FROM factory.dim_device
+UNION ALL SELECT 'dim_date',        COUNT(*) FROM factory.dim_date
+UNION ALL SELECT 'fact_iot_events', COUNT(*) FROM factory.fact_iot_events
+UNION ALL SELECT 'fact_machine_logs',COUNT(*) FROM factory.fact_machine_logs;
 ```
 
-Expected: 9 rows (7 tables + 2 staging tables)
+Expected:
+```
+dim_date            10
+dim_device           3
+dim_plant            3
+fact_iot_events     60
+fact_machine_logs   10
+```
+
+> If counts are wrong, run the TRUNCATE block first:
+> ```sql
+> TRUNCATE factory.fact_iot_events CASCADE;
+> TRUNCATE factory.fact_machine_logs CASCADE;
+> TRUNCATE factory.dim_date CASCADE;
+> TRUNCATE factory.dim_plant CASCADE;
+> TRUNCATE factory.dim_device CASCADE;
+> DROP MATERIALIZED VIEW IF EXISTS reporting.mv_hourly_plant_kpis;
+> ```
+> Then re-execute `01_tables_postgres_full.sql`.
 
 ---
 
 ## Run dbt Transformations
 
-### Step 1 — Install dbt
+### 1. Load environment variables
 
 ```bash
-pip install dbt-postgres
-dbt --version
+# Windows CMD
+SET DB_HOST=YOUR_RDS_ENDPOINT
+SET DB_PORT=5432
+SET DB_NAME=factory_dw
+SET DB_USER=factoryadmin
+SET DB_PASSWORD=YOUR_PASSWORD
+
+# Windows PowerShell
+.\load_env.ps1
 ```
 
-### Step 2 — Initialize dbt project
+### 2. Run dbt
 
 ```bash
-cd factory-data-platform
-dbt init factory_dbt
+cd cdk/factory_dbt
+
+dbt debug              # test connection
+dbt run                # execute all models
+dbt test               # run data quality tests
+dbt docs generate      # build documentation
+dbt docs serve         # open http://localhost:8080
 ```
 
-Answer the prompts:
+### 3. Expected results
+
 ```
-adapter:   postgres
-host:      [your RDS endpoint]
-port:      5432
-user:      factoryadmin
-password:  [your password]
-dbname:    factory_dw
-schema:    factory
-threads:   4
+✅ stg_iot_events         VIEW  — standardized IoT events
+✅ weekly_plant_report    TABLE — 19 rows weekly KPIs
+✅ fact_iot_incremental   TABLE — incremental load
 ```
 
-### Step 3 — Run dbt models
+### 4. Model lineage
 
-```bash
-cd factory_dbt
-dbt run
+```
+source: fact_iot_events + dim_plant
+              │
+        stg_iot_events (view)
+              │
+    ┌─────────┴────────────┐
+    ▼                      ▼
+weekly_plant_report   fact_iot_incremental
+     (table)               (table)
 ```
 
-Expected output:
-```
-✅ stg_iot_events          (VIEW)
-✅ weekly_plant_report     (TABLE)
-✅ fact_iot_incremental    (TABLE, incremental)
-```
-
-### Step 4 — Run dbt tests
-
-```bash
-dbt test
-```
-
-Tests: `not_null`, `unique` on `event_id`, `accepted_values` on `event_name`
-
-### Step 5 — Generate and view documentation
-
-```bash
-dbt docs generate
-dbt docs serve
-```
-
-Opens **http://localhost:8080** — lineage graph showing:
-```
-source: fact_iot_events
-        ↓
-    stg_iot_events (view)
-        ↓
-    weekly_plant_report (table)
-    fact_iot_incremental (table)
-```
+> If `weekly_plant_report` returns 0 rows, check the date filter in `models/marts/weekly_plant_report.sql`:
+> ```sql
+> WHERE event_ts >= '2024-01-01'   -- use this for test data
+> ```
 
 ---
 
-## Test the Pipeline
+## Connect Power BI
 
-### Manually trigger a Glue job
+### 1. Install PostgreSQL ODBC driver
 
-```bash
-aws glue start-job-run \
-  --job-name factory-log-processor-prod \
-  --region eu-west-1
+Download from: [postgresql.org/ftp/odbc/versions/msi](https://www.postgresql.org/ftp/odbc/versions/msi/)  
+Install: `psqlodbc_16_00_0000-x64.zip`
 
-# Check status
-aws glue get-job-runs \
-  --job-name factory-log-processor-prod \
-  --region eu-west-1 \
-  --query "JobRuns[0].{Status:JobRunState,Duration:ExecutionTime}"
+### 2. Fix SSL (run PowerShell as Administrator)
+
+```powershell
+Invoke-WebRequest `
+  -Uri "https://truststore.pki.rds.amazonaws.com/eu-west-1/eu-west-1-bundle.pem" `
+  -OutFile "cert.pem"
+
+Import-Certificate -FilePath "cert.pem" -CertStoreLocation Cert:\LocalMachine\Root
 ```
 
-### Upload test IoT data to S3
+### 3. Connect
 
-```python
-import boto3, json
-
-s3 = boto3.client('s3', region_name='eu-west-1')
-
-events = [
-    {
-        "event_id": f"EVT-TEST-{i:04d}",
-        "device_id": "DEVICE-001",
-        "plant_id": "LYON-01",
-        "timestamp_ms": 1715760000000 + i * 1000,
-        "event_name": "TEMPERATURE",
-        "value_numeric": 80 + i * 1.5,
-        "unit": "°C",
-        "quality": 95,
-        "alert_threshold": 90.0
-    }
-    for i in range(20)
-]
-
-s3.put_object(
-    Bucket='factory-raw-prod-YOUR_ACCOUNT_ID',
-    Key='topics/factory-iot-events/year=2024/month=05/day=15/hour=08/test_batch.json',
-    Body='\n'.join(json.dumps(e) for e in events)
-)
-print("Test data uploaded to S3")
+```
+Get Data → PostgreSQL database
+  Server:   YOUR_RDS_ENDPOINT
+  Database: factory_dw
+  Mode:     Import
+  (Advanced options: leave empty)
 ```
 
-### Run weekly report query
+Credentials → Database tab:
+```
+Username: factoryadmin
+Password: YOUR_PASSWORD
+```
 
-In DBeaver, open `redshift/queries/weekly_report_optimized.sql` and execute the optimized query (AFTER section).
+### 4. Select tables
+
+```
+✅ factory.fact_iot_events
+✅ factory.fact_machine_logs
+✅ factory.dim_plant
+✅ factory.dim_device
+✅ factory.dim_date
+✅ factory.weekly_plant_report
+```
+
+### 5. Dashboard structure (3 pages)
+
+**Page 1 — Plant KPIs Overview**
+- 4 KPI Cards: Total Events, Total Alarms, Alarm Rate %, Avg Quality
+- Bar chart: Events by plant
+- Line chart: Temperature trend over time
+- Slicer: Date range, Plant
+
+**Page 2 — Machine Health**
+- Line chart: Temperature by device over time
+- Table: Top 5 hottest machines
+- Scatter: Threshold breaches (red = breach)
+- Slicer: Event type (TEMPERATURE/VIBRATION/PRESSURE)
+
+**Page 3 — Weekly Report**
+- KPI Cards: This week vs last week alarms (WoW delta)
+- Line chart: Alarm trend last 8 weeks
+- Table: Plant performance (events, alarms, rate%, SLA status)
+- Conditional formatting: alarm_rate > 1% = red, < 1% = green
 
 ---
 
-## External Tools Used
+## CI/CD Pipeline
 
-### AWS Services
+### Workflow overview
 
-| Service | Role in Pipeline | Why chosen |
-|---------|----------------|-----------|
-| **MSK (Kafka)** | Real-time event ingestion | Handles 10k+ events/sec, durable, replay capability |
-| **S3** | Data lake storage (raw + processed) | Infinite scale, $0.023/GB, integrates with all AWS services |
-| **AWS Glue** | Serverless PySpark execution | No cluster management, pay-per-use, auto-scales |
-| **AWS CDK** | Infrastructure as Code | Python-native, type-safe, reusable constructs |
-| **RDS PostgreSQL** | Data warehouse (dev/test) | Free tier eligible, SQL-compatible with Redshift |
-| **Redshift** | Data warehouse (production) | Columnar storage, DISTKEY/SORTKEY, massively parallel |
-| **KMS** | Encryption at rest | Centralized key management, automatic rotation |
-| **Secrets Manager** | Database credentials | No hardcoded passwords, automatic rotation |
-| **CloudWatch** | Monitoring + alerting | Native AWS, zero config for Glue metrics |
-| **IAM** | Access control | Least-privilege roles per service |
+```
+git push (any branch)
+      │
+      ▼
+CI Pipeline (automatic)
+  🔍 Code Quality    flake8 + bandit + secret scan
+  🏗️ CDK Synthesize  validate infra templates
+  🔄 dbt Test        spin up PostgreSQL, compile + test models
+  🗄️ SQL Lint        sqlfluff validation
 
-### External Tools
+git push main only
+      │
+      ▼
+CD Pipeline (requires manual approval)
+  🚀 CDK Deploy      all 5 stacks to AWS
+  🗄️ DB Migrations   run DDL
+  🔄 dbt Run         execute transformations
+  🧪 Smoke Tests     verify deployment
+  📢 Summary         deployment report
+```
 
-| Tool | Purpose | Install |
-|------|---------|--------|
-| **DBeaver** | SQL GUI — explore tables, run queries, visualize schema | [dbeaver.io](https://dbeaver.io/download/) |
-| **dbt** | SQL transformation framework — models, tests, lineage docs | `pip install dbt-postgres` |
-| **AWS CLI** | Deploy + manage AWS resources from terminal | `winget install Amazon.AWSCLI` |
-| **AWS CDK CLI** | Synthesize + deploy CloudFormation stacks | `npm install -g aws-cdk` |
+### Setup GitHub Secrets
 
-### Data Formats
+```
+Repository → Settings → Secrets and variables → Actions → New repository secret
+```
 
-| Format | Used for | Why |
-|--------|---------|-----|
-| **JSON** | Raw IoT events from Kafka | Flexible schema, human-readable |
-| **Parquet** | Processed data in S3 | Columnar = 10-50x faster reads, 5x compression |
-| **Snappy** | Parquet compression codec | Fast decompression, good ratio |
+| Secret Name | Value |
+|-------------|-------|
+| `AWS_ACCESS_KEY_ID` | Your IAM access key (AKIA...) |
+| `AWS_SECRET_ACCESS_KEY` | Your IAM secret key |
+| `AWS_ACCOUNT_ID` | Your AWS account ID |
+| `ALERT_EMAIL` | Email for deployment alerts |
+
+### Setup production environment (manual approval gate)
+
+```
+Repository → Settings → Environments → New environment
+  Name: production
+  ✅ Required reviewers: YOUR_GITHUB_USERNAME
+  Save protection rules
+```
 
 ---
 
 ## Performance Optimizations
 
-### Redshift/PostgreSQL Query Optimization (62% improvement)
+### SQL query optimization (-62% on weekly report)
 
-| Technique | Before | After | Impact |
-|-----------|--------|-------|--------|
-| Materialized View for hourly KPIs | Full scan every query | Pre-aggregated | -80% data scanned |
-| SORTKEY + zone maps | All blocks scanned | Irrelevant blocks skipped | -60% I/O |
-| `APPROXIMATE COUNT DISTINCT` | Exact count (slow) | HyperLogLog ±2% | 10x faster |
-| Window functions vs correlated subquery | O(N²) | O(N) | Linear scaling |
-| WLM queue separation | BI blocked by ETL | Short queries bypass ETL | No contention |
+| Technique | Impact |
+|-----------|--------|
+| Materialized View for hourly KPIs | Avoids full fact scan on every report |
+| SORTKEY + zone map pruning | Irrelevant disk blocks skipped |
+| `APPROXIMATE COUNT DISTINCT` (HyperLogLog) | 10x faster, ±2% error |
+| Window functions vs correlated subqueries | O(N) instead of O(N²) |
+| WLM queue separation (BI vs ETL) | No query contention |
 
-**Result:** Weekly report query time: **45s → 17s** on 500M row fact table
+**Result: 45s → 17s on 500M row fact table**
 
-### PySpark Optimizations
+### PySpark best practices applied
 
-| Technique | Purpose |
-|-----------|---------|
-| Adaptive Query Execution (AQE) | Auto-coalesces small partitions |
-| Job bookmarks | Idempotent reprocessing — no duplicates on retry |
-| Kryo serializer | 2x faster than Java default serializer |
-| `foreachBatch` in streaming | Exactly-once semantics |
-| Broadcast join for device registry | Avoids shuffle on small dimension table |
+| Pattern | Why |
+|---------|-----|
+| Job bookmarks | Idempotent — no duplicates on retry |
+| AQE (Adaptive Query Execution) | Dynamic partition coalescing |
+| Kryo serializer | 2x faster than Java default |
+| `foreachBatch` in streaming | Exactly-once guarantee |
+| Broadcast join for device registry | Eliminates shuffle network cost |
 
-### S3 Cost Optimization
+### S3 lifecycle (storage cost optimization)
 
 ```
-0-30 days   → Standard         ($0.023/GB)
-30-90 days  → Standard-IA      ($0.0125/GB)
-90-365 days → Glacier Instant  ($0.004/GB)
-365+ days   → Deep Archive     ($0.00099/GB)
+0-30d   Standard          $0.023/GB
+30-90d  Standard-IA       $0.0125/GB
+90-365d Glacier Instant   $0.004/GB
+365d+   Deep Archive      $0.00099/GB
 ```
 
 ---
 
-## Cost Estimate
+## Cost Management
 
-> Based on eu-west-1, production workload
+### Estimated costs (eu-west-1, dev)
 
-| Resource | Configuration | Monthly Cost |
-|----------|--------------|-------------|
-| MSK Kafka | 2x kafka.m5.large | ~$300 |
-| Glue log_processor | 5x G.1X, 1h/day | ~$65 |
-| Glue iot_transformer | 10x G.2X, 15min/15min | ~$480 |
-| RDS PostgreSQL (dev) | t3.micro, 20GB | ~$15 |
-| Redshift (prod) | dc2.large single node | ~$180 |
-| S3 (1TB) | Standard + lifecycle | ~$23 |
-| NAT Gateway | 1 gateway | ~$33 |
-| **Total (dev with RDS)** | | **~$916/month** |
-| **Total (prod with Redshift)** | | **~$1,100/month** |
+| Resource | Daily | Monthly |
+|----------|-------|---------|
+| NAT Gateway | ~$1.08 | ~$33 |
+| RDS t3.micro | ~$0.48 | ~$15 |
+| S3 (nearly empty) | ~$0.00 | ~$0 |
+| Glue (idle) | ~$0.00 | ~$0 |
+| **Total** | **~$1.56** | **~$48** |
 
-> 💡 **Cost tip:** NAT Gateway ($1.08/day) is the biggest idle cost. Destroy `FactoryNetwork-prod` when not actively developing.
-
----
-
-## Destroy Resources
-
-> ⚠️ Always destroy when done to avoid unexpected charges.
+### Destroy when done
 
 ```bash
-# Destroy all stacks (in reverse dependency order)
-cdk destroy --all --context account=YOUR_ACCOUNT_ID --context env=prod
+cdk destroy FactoryNetwork-prod \
+            FactoryStorage-prod \
+            FactoryGlue-prod \
+            FactoryRedshift-prod \
+            FactoryMonitoring-prod
 ```
 
-Type `y` when prompted for each stack.
-
-**What is destroyed vs kept:**
-
-| Resource | After destroy |
-|----------|--------------|
-| VPC, NAT Gateway | ✅ Destroyed |
-| Glue jobs, triggers | ✅ Destroyed |
-| RDS PostgreSQL | ✅ Destroyed |
-| IAM roles, secrets | ✅ Destroyed |
-| S3 buckets | ⚠️ **Kept** (RemovalPolicy.RETAIN) |
-| KMS key | ⚠️ **Kept** (RemovalPolicy.RETAIN) |
-
-S3 buckets are retained to protect your data. Delete manually if needed:
+S3 buckets are retained (data protection). Delete manually:
 ```bash
-aws s3 rb s3://factory-raw-prod-YOUR_ACCOUNT_ID --force
-aws s3 rb s3://factory-processed-prod-YOUR_ACCOUNT_ID --force
-aws s3 rb s3://factory-scripts-prod-YOUR_ACCOUNT_ID --force
+aws s3 rb s3://factory-raw-prod-ACCOUNT_ID --force
+aws s3 rb s3://factory-processed-prod-ACCOUNT_ID --force
+aws s3 rb s3://factory-scripts-prod-ACCOUNT_ID --force
 ```
 
 ---
 
 ## Troubleshooting
 
+### `python3 not found` on Windows
+In `cdk/cdk.json`, change `"app": "python3 app.py"` to `"app": "python app.py"`
 
+### CDK bootstrap fails
+Run `aws sts get-caller-identity` — must return your Account ID with no errors.
 
-### `cdk bootstrap` fails
+### `SubscriptionRequiredException` for Redshift or MSK
+Not available on all account types. Use RDS PostgreSQL (same SQL, already configured in `redshift_stack.py`).
+
+### dbt `Env var required but not provided: DB_HOST`
+Load variables before running dbt:
 ```bash
-# Verify AWS credentials
-aws sts get-caller-identity
-# Must return your account ID
+# Windows CMD
+SET DB_HOST=YOUR_ENDPOINT
+SET DB_PASSWORD=YOUR_PASSWORD
+# ... other vars
+dbt run
 ```
 
-### `SubscriptionRequiredException` for Redshift
-Redshift Serverless/Provisioned requires account activation on some account types.  
-**Solution:** Use RDS PostgreSQL (same SQL, see `redshift_stack.py`)
+### Power BI SSL certificate error
+Install the RDS certificate (see [Connect Power BI](#connect-power-bi) → Step 2).
 
-### `ModuleNotFoundError` for stacks
-```bash
-# Create missing __init__.py
-touch cdk/stacks/__init__.py
+### `weekly_plant_report` returns 0 rows
+The date filter excludes test data. Edit `models/marts/weekly_plant_report.sql`:
+```sql
+WHERE event_ts >= '2024-01-01'
 ```
-
-### dbt `relation does not exist`
-The DDL hasn't been run yet. Execute `01_tables_postgres.sql` in DBeaver first, then rerun `dbt run`.
-
-### DBeaver connection refused (port 5432)
-Check the Security Group on RDS allows inbound TCP 5432 from `0.0.0.0/0` (dev only).
+Then: `dbt run --select weekly_plant_report`
 
 ### Glue job FAILED
 ```bash
-# Check logs
 aws glue get-job-runs \
   --job-name factory-log-processor-prod \
-  --region eu-west-1
-
-# View CloudWatch logs
-aws logs get-log-events \
-  --log-group-name /aws-glue/jobs/output \
-  --log-stream-name [stream-name]
+  --region eu-west-1 \
+  --query "JobRuns[0].{Status:JobRunState,Error:ErrorMessage}"
 ```
+
+### Tables exist but data is wrong (DBeaver shows old counts)
+Run the TRUNCATE block, then re-execute `01_tables_postgres_full.sql`.
 
 ---
 
 ## Author
 
-**Achraf Jemali** — Data & AI Engineer   
-[GitHub](https://github.com/JEMALIACHRAF) · [LinkedIn](https://linkedin.com/in/achraf-jemali)
+**Achraf Jemali** — Data & AI Engineer
+
+M2 DataScale @ Université Paris-Saclay / CentraleSupélec  
+Apprenticeship @ Capgemini SogetiLabs
+
+[![GitHub](https://img.shields.io/badge/GitHub-JEMALIACHRAF-black?logo=github)](https://github.com/JEMALIACHRAF)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Achraf_Jemali-0077B5?logo=linkedin)](https://linkedin.com/in/achraf-jemali)
+
+---
+
+*MIT License — contributions welcome*
