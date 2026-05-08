@@ -705,7 +705,7 @@ M2 DataScale @ Université Paris-Saclay / CentraleSupélec
 Apprenticeship @ Capgemini SogetiLabs
 
 [![GitHub](https://img.shields.io/badge/GitHub-JEMALIACHRAF-black?logo=github)](https://github.com/JEMALIACHRAF)
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-Achraf_Jemali-0077B5?logo=linkedin)](https://linkedin.com/in/achraf-jemali)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Achraf_Jemali-0077B5?logo=linkedin)](https://linkedin.com/in/achraf-jemali-54a417239)
 
 ---
 
