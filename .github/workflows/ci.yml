@@ -50,7 +50,7 @@ jobs:
         run: |
           bandit -r glue_jobs/ cdk/stacks/ \
             -ll \
-            --skip B101,B311 \
+            --skip B101,B311,B108 \
             -f json -o bandit-report.json || true
           bandit -r glue_jobs/ cdk/stacks/ -ll --skip B101,B311
 
