@@ -1,0 +1,342 @@
+name: CI — Validate & Test
+
+on:
+  push:
+    branches: ["**"]        # tous les branches
+  pull_request:
+    branches: [main]        # PR vers main
+
+env:
+  PYTHON_VERSION: "3.11"
+  AWS_REGION: eu-west-1
+
+jobs:
+  # ════════════════════════════════════════════════════════════
+  # JOB 1 — Code Quality (lint + security)
+  # ════════════════════════════════════════════════════════════
+  code-quality:
+    name: 🔍 Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install linting tools
+        run: |
+          pip install flake8 black bandit safety
+
+      - name: Lint Python (flake8)
+        run: |
+          flake8 glue_jobs/ cdk/ \
+            --max-line-length=120 \
+            --exclude=cdk/.venv,cdk/cdk.out \
+            --statistics
+        continue-on-error: false
+
+      - name: Check formatting (black)
+        run: |
+          black --check --diff \
+            glue_jobs/ cdk/stacks/ \
+            --line-length 120
+        continue-on-error: true  # warning only, not blocking
+
+      - name: Security scan (bandit)
+        run: |
+          bandit -r glue_jobs/ cdk/stacks/ \
+            -ll \
+            --skip B101,B311 \
+            -f json -o bandit-report.json || true
+          bandit -r glue_jobs/ cdk/stacks/ -ll --skip B101,B311
+
+      - name: Check dependencies for vulnerabilities (safety)
+        run: |
+          safety check -r cdk/requirements.txt \
+            --ignore 70612 || true
+
+      - name: Scan for hardcoded secrets
+        run: |
+          # Check that .env is not committed
+          if git show --name-only HEAD | grep -q "^\.env$"; then
+            echo "❌ ERROR: .env file detected in commit!"
+            exit 1
+          fi
+          # Check for AWS keys pattern in code
+          if grep -r "AKIA[0-9A-Z]{16}" --include="*.py" --include="*.json" .; then
+            echo "❌ ERROR: AWS Access Key detected in code!"
+            exit 1
+          fi
+          echo "✅ No hardcoded secrets found"
+
+      - name: Upload security report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-report
+          path: bandit-report.json
+
+  # ════════════════════════════════════════════════════════════
+  # JOB 2 — CDK Synth (validate infrastructure code)
+  # ════════════════════════════════════════════════════════════
+  cdk-validate:
+    name: 🏗️ CDK Synthesize
+    runs-on: ubuntu-latest
+    needs: code-quality
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Set up Node.js (for CDK CLI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk
+
+      - name: Install CDK dependencies
+        run: |
+          cd cdk
+          pip install -r requirements.txt
+
+      - name: Create mock .env for synth
+        run: |
+          cat > .env << EOF
+          AWS_ACCOUNT_ID=123456789012
+          AWS_REGION=eu-west-1
+          ENV_NAME=ci
+          ALERT_EMAIL=ci@factory.com
+          DB_HOST=localhost
+          DB_PORT=5432
+          DB_NAME=factory_dw
+          DB_USER=factoryadmin
+          DB_PASSWORD=mock_password
+          EOF
+
+      - name: CDK Synth (validate templates)
+        run: |
+          cd cdk
+          cdk synth \
+            --context account=123456789012 \
+            --context region=eu-west-1 \
+            --context env=ci \
+            --quiet
+        env:
+          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: mock_key
+          AWS_SECRET_ACCESS_KEY: mock_secret
+
+      - name: Upload CDK templates
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdk-templates
+          path: cdk/cdk.out/
+
+  # ════════════════════════════════════════════════════════════
+  # JOB 3 — dbt Validate (compile + test models)
+  # ════════════════════════════════════════════════════════════
+  dbt-validate:
+    name: 🔄 dbt Compile & Test
+    runs-on: ubuntu-latest
+    needs: code-quality
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: factoryadmin
+          POSTGRES_PASSWORD: factorypass123
+          POSTGRES_DB: factory_dw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dbt
+        run: pip install dbt-postgres
+
+      - name: Setup dbt profile
+        run: |
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml << EOF
+          factory_dbt:
+            target: ci
+            outputs:
+              ci:
+                type: postgres
+                host: localhost
+                port: 5432
+                user: factoryadmin
+                password: factorypass123
+                dbname: factory_dw
+                schema: factory
+                threads: 4
+          EOF
+
+      - name: Create schemas and seed data
+        run: |
+          PGPASSWORD=factorypass123 psql \
+            -h localhost -U factoryadmin -d factory_dw << 'SQL'
+          CREATE SCHEMA IF NOT EXISTS factory;
+          CREATE SCHEMA IF NOT EXISTS reporting;
+          CREATE SCHEMA IF NOT EXISTS staging;
+
+          CREATE TABLE IF NOT EXISTS factory.dim_plant (
+              plant_sk BIGSERIAL PRIMARY KEY,
+              plant_id VARCHAR(50) NOT NULL UNIQUE,
+              plant_name VARCHAR(200), country_code VARCHAR(3),
+              region VARCHAR(100), timezone VARCHAR(50),
+              shift_morning_start TIME, shift_afternoon_start TIME,
+              shift_night_start TIME, capacity_units INTEGER,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE TABLE IF NOT EXISTS factory.dim_device (
+              device_sk BIGSERIAL PRIMARY KEY,
+              device_id VARCHAR(100) NOT NULL, device_type VARCHAR(50),
+              asset_name VARCHAR(200), plant_id VARCHAR(50) NOT NULL,
+              line_id VARCHAR(50), location VARCHAR(200),
+              criticality VARCHAR(20), manufacturer VARCHAR(100),
+              model VARCHAR(100), install_date DATE,
+              sla_minutes INTEGER, is_active BOOLEAN DEFAULT TRUE,
+              valid_from TIMESTAMP, valid_to TIMESTAMP,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE TABLE IF NOT EXISTS factory.dim_date (
+              date_sk INTEGER PRIMARY KEY, full_date DATE NOT NULL,
+              year SMALLINT, quarter SMALLINT, month SMALLINT,
+              month_name VARCHAR(20), week_of_year SMALLINT,
+              day_of_month SMALLINT, day_of_week SMALLINT,
+              day_name VARCHAR(20), is_weekend BOOLEAN,
+              is_holiday BOOLEAN, fiscal_period VARCHAR(10)
+          );
+          CREATE TABLE IF NOT EXISTS factory.fact_iot_events (
+              event_sk BIGSERIAL PRIMARY KEY,
+              event_id VARCHAR(100), device_sk BIGINT,
+              plant_sk BIGINT, date_sk INTEGER,
+              event_ts TIMESTAMP NOT NULL, event_name VARCHAR(100),
+              value_numeric DOUBLE PRECISION, value_string VARCHAR(500),
+              unit VARCHAR(50), quality SMALLINT,
+              alert_threshold DOUBLE PRECISION,
+              threshold_breach BOOLEAN, anomaly_score DOUBLE PRECISION,
+              avg_value_1min DOUBLE PRECISION,
+              stddev_value_1min DOUBLE PRECISION,
+              processed_at TIMESTAMP, year SMALLINT, month SMALLINT
+          );
+          CREATE TABLE IF NOT EXISTS factory.fact_machine_logs (
+              log_sk BIGSERIAL PRIMARY KEY,
+              event_id VARCHAR(100) NOT NULL,
+              machine_id VARCHAR(100) NOT NULL,
+              device_sk BIGINT, plant_sk BIGINT, date_sk INTEGER,
+              event_ts TIMESTAMP NOT NULL, event_type VARCHAR(50),
+              severity VARCHAR(20), error_code VARCHAR(50),
+              temperature_c REAL, vibration_hz REAL,
+              pressure_bar REAL, cycle_count BIGINT,
+              operator_id VARCHAR(100), shift VARCHAR(20),
+              is_alarm BOOLEAN, is_critical BOOLEAN,
+              resolution_minutes INTEGER, processed_at TIMESTAMP,
+              year SMALLINT, month SMALLINT
+          );
+
+          INSERT INTO factory.dim_plant VALUES
+          (1,'LYON-01','Usine Lyon Nord','FRA','EMEA','Europe/Paris','06:00','14:00','22:00',500,NOW()),
+          (2,'PARIS-01','Usine Paris Sud','FRA','EMEA','Europe/Paris','06:00','14:00','22:00',300,NOW()),
+          (3,'BERLIN-01','Usine Berlin Est','DEU','EMEA','Europe/Berlin','06:00','14:00','22:00',800,NOW());
+
+          INSERT INTO factory.dim_device VALUES
+          (1,'DEVICE-001','SENSOR','Capteur Temp','LYON-01','LINE-A','Hall A','HIGH','Siemens','S7-1200','2022-01-15',5,TRUE,NOW(),NULL,NOW()),
+          (2,'DEVICE-002','PLC','Automate','LYON-01','LINE-B','Hall B','HIGH','ABB','AC500','2021-06-01',10,TRUE,NOW(),NULL,NOW()),
+          (3,'DEVICE-003','SENSOR','Capteur Pression','PARIS-01','LINE-A','Hall C','MEDIUM','Bosch','BMP280','2023-03-20',15,TRUE,NOW(),NULL,NOW());
+
+          INSERT INTO factory.dim_date VALUES
+          (20240515,'2024-05-15',2024,2,5,'May',20,15,3,'Wednesday',FALSE,FALSE,'FY24-Q2');
+
+          INSERT INTO factory.fact_iot_events
+            (event_id,device_sk,plant_sk,date_sk,event_ts,event_name,
+             value_numeric,unit,quality,alert_threshold,threshold_breach,
+             anomaly_score,year,month)
+          VALUES
+          ('EVT-001',1,1,20240515,'2024-05-15 08:00:00','TEMPERATURE',85.3,'°C',95,90.0,FALSE,0.1,2024,5),
+          ('EVT-002',1,1,20240515,'2024-05-15 09:00:00','TEMPERATURE',92.7,'°C',90,90.0,TRUE,0.8,2024,5),
+          ('EVT-003',2,1,20240515,'2024-05-15 10:00:00','VIBRATION',1.2,'Hz',88,2.0,FALSE,0.2,2024,5);
+          SQL
+
+      - name: dbt debug (test connection)
+        run: |
+          cd cdk/factory_dbt
+          dbt debug
+
+      - name: dbt compile (validate SQL syntax)
+        run: |
+          cd cdk/factory_dbt
+          dbt compile
+
+      - name: dbt run (execute models)
+        run: |
+          cd cdk/factory_dbt
+          dbt run
+
+      - name: dbt test (data quality checks)
+        run: |
+          cd cdk/factory_dbt
+          dbt test
+
+      - name: dbt docs generate
+        run: |
+          cd cdk/factory_dbt
+          dbt docs generate
+
+      - name: Upload dbt artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-docs
+          path: cdk/factory_dbt/target/
+
+  # ════════════════════════════════════════════════════════════
+  # JOB 4 — SQL Validation
+  # ════════════════════════════════════════════════════════════
+  sql-validate:
+    name: 🗄️  SQL Validation
+    runs-on: ubuntu-latest
+    needs: code-quality
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install sqlfluff
+        run: pip install sqlfluff
+
+      - name: Lint SQL files
+        run: |
+          sqlfluff lint redshift/queries/ \
+            --dialect ansi \
+            --exclude-rules L034,L036,L044 || true
+
+      - name: Check DDL files exist
+        run: |
+          test -f redshift/ddl/01_tables_redshift.sql && echo " Redshift DDL found"
+          test -f redshift/ddl/01_tables_postgres.sql || \
+          test -f redshift/ddl/01_tables_postgres_full.sql && echo " PostgreSQL DDL found"

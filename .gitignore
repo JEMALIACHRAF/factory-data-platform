@@ -16,7 +16,8 @@ factory_dbt/target/
 factory_dbt/dbt_packages/
 factory_dbt/logs/
 factory_dbt/.user.yml
-
+.env
+factory_dbt/profiles.yml
 # AWS credentials - NE JAMAIS PUSHER
 .env
 *.env

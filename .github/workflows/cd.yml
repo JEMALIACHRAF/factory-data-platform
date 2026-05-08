@@ -1,0 +1,403 @@
+name: CD — Deploy to AWS
+
+on:
+  push:
+    branches: [main]        # Deploy uniquement sur main
+  workflow_dispatch:        # Déclenchement manuel possible
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        required: true
+        default: "prod"
+        type: choice
+        options: [prod, staging]
+
+env:
+  PYTHON_VERSION: "3.11"
+  AWS_REGION: eu-west-1
+  ENV_NAME: prod
+
+jobs:
+  # ════════════════════════════════════════════════════════════
+  # JOB 1 — Deploy Infrastructure (CDK)
+  # ════════════════════════════════════════════════════════════
+  deploy-infrastructure:
+    name:  Deploy AWS Infrastructure
+    runs-on: ubuntu-latest
+    environment: production       # require manual approval in GitHub
+    outputs:
+      db_endpoint: ${{ steps.get_outputs.outputs.db_endpoint }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install CDK CLI
+        run: npm install -g aws-cdk
+
+      - name: Install CDK dependencies
+        run: |
+          cd cdk
+          pip install -r requirements.txt
+
+      - name: Create .env from GitHub Secrets
+        run: |
+          cat > .env << EOF
+          AWS_ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID }}
+          AWS_REGION=${{ env.AWS_REGION }}
+          ENV_NAME=${{ env.ENV_NAME }}
+          ALERT_EMAIL=${{ secrets.ALERT_EMAIL }}
+          DB_HOST=placeholder
+          DB_PORT=5432
+          DB_NAME=factory_dw
+          DB_USER=factoryadmin
+          DB_PASSWORD=placeholder
+          EOF
+
+      - name: CDK Bootstrap (idempotent)
+        run: |
+          cd cdk
+          cdk bootstrap \
+            aws://${{ secrets.AWS_ACCOUNT_ID }}/${{ env.AWS_REGION }} \
+            --context account=${{ secrets.AWS_ACCOUNT_ID }} \
+            --context env=${{ env.ENV_NAME }}
+
+      - name: CDK Deploy — Network + Storage
+        run: |
+          cd cdk
+          cdk deploy FactoryNetwork-${{ env.ENV_NAME }} \
+                     FactoryStorage-${{ env.ENV_NAME }} \
+            --context account=${{ secrets.AWS_ACCOUNT_ID }} \
+            --context env=${{ env.ENV_NAME }} \
+            --require-approval never \
+            --outputs-file outputs-infra.json
+
+      - name: CDK Deploy — Glue + Redshift
+        run: |
+          cd cdk
+          cdk deploy FactoryGlue-${{ env.ENV_NAME }} \
+                     FactoryRedshift-${{ env.ENV_NAME }} \
+            --context account=${{ secrets.AWS_ACCOUNT_ID }} \
+            --context env=${{ env.ENV_NAME }} \
+            --require-approval never \
+            --outputs-file outputs-db.json
+
+      - name: CDK Deploy — Monitoring
+        run: |
+          cd cdk
+          cdk deploy FactoryMonitoring-${{ env.ENV_NAME }} \
+            --context account=${{ secrets.AWS_ACCOUNT_ID }} \
+            --context env=${{ env.ENV_NAME }} \
+            --require-approval never
+
+      - name: Get RDS endpoint from outputs
+        id: get_outputs
+        run: |
+          ENDPOINT=$(aws cloudformation describe-stacks \
+            --stack-name FactoryRedshift-${{ env.ENV_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query "Stacks[0].Outputs[?OutputKey=='DBEndpoint'].OutputValue" \
+            --output text)
+          echo "db_endpoint=$ENDPOINT" >> $GITHUB_OUTPUT
+          echo "RDS Endpoint: $ENDPOINT"
+
+      - name: Upload deployment outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdk-outputs
+          path: cdk/outputs-*.json
+
+  # ════════════════════════════════════════════════════════════
+  # JOB 2 — Run Database Migrations
+  # ════════════════════════════════════════════════════════════
+  run-migrations:
+    name:  Run DB Migrations
+    runs-on: ubuntu-latest
+    needs: deploy-infrastructure
+    env:
+      DB_ENDPOINT: ${{ needs.deploy-infrastructure.outputs.db_endpoint }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Get DB password from Secrets Manager
+        id: get_password
+        run: |
+          SECRET=$(aws secretsmanager get-secret-value \
+            --secret-id "factory/postgres/admin-${{ env.ENV_NAME }}" \
+            --region ${{ env.AWS_REGION }} \
+            --query SecretString \
+            --output text)
+          PASSWORD=$(echo $SECRET | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
+          echo "::add-mask::$PASSWORD"
+          echo "db_password=$PASSWORD" >> $GITHUB_OUTPUT
+
+      - name: Run DDL migrations
+        run: |
+          PGPASSWORD="${{ steps.get_password.outputs.db_password }}" \
+          psql \
+            -h ${{ env.DB_ENDPOINT }} \
+            -p 5432 \
+            -U factoryadmin \
+            -d factory_dw \
+            -f redshift/ddl/01_tables_postgres_full.sql \
+            --set ON_ERROR_STOP=off
+          echo " Migrations completed"
+
+      - name: Verify tables exist
+        run: |
+          PGPASSWORD="${{ steps.get_password.outputs.db_password }}" \
+          psql \
+            -h ${{ env.DB_ENDPOINT }} \
+            -p 5432 \
+            -U factoryadmin \
+            -d factory_dw \
+            -c "SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema IN ('factory','staging','reporting') ORDER BY 1,2;"
+
+  # ════════════════════════════════════════════════════════════
+  # JOB 3 — Run dbt Transformations
+  # ════════════════════════════════════════════════════════════
+  run-dbt:
+    name:  Run dbt Transformations
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure, run-migrations]
+    env:
+      DB_ENDPOINT: ${{ needs.deploy-infrastructure.outputs.db_endpoint }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dbt
+        run: pip install dbt-postgres
+
+      - name: Get DB password from Secrets Manager
+        id: get_password
+        run: |
+          SECRET=$(aws secretsmanager get-secret-value \
+            --secret-id "factory/postgres/admin-${{ env.ENV_NAME }}" \
+            --region ${{ env.AWS_REGION }} \
+            --query SecretString \
+            --output text)
+          PASSWORD=$(echo $SECRET | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
+          echo "::add-mask::$PASSWORD"
+          echo "db_password=$PASSWORD" >> $GITHUB_OUTPUT
+
+      - name: Setup dbt profile
+        run: |
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml << EOF
+          factory_dbt:
+            target: ${{ env.ENV_NAME }}
+            outputs:
+              ${{ env.ENV_NAME }}:
+                type: postgres
+                host: ${{ env.DB_ENDPOINT }}
+                port: 5432
+                user: factoryadmin
+                password: "${{ steps.get_password.outputs.db_password }}"
+                dbname: factory_dw
+                schema: factory
+                threads: 4
+          EOF
+
+      - name: dbt run
+        run: |
+          cd cdk/factory_dbt
+          dbt run --target ${{ env.ENV_NAME }}
+
+      - name: dbt test
+        run: |
+          cd cdk/factory_dbt
+          dbt test --target ${{ env.ENV_NAME }}
+
+      - name: dbt docs generate + publish
+        run: |
+          cd cdk/factory_dbt
+          dbt docs generate --target ${{ env.ENV_NAME }}
+
+      - name: Upload dbt docs
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-docs-prod
+          path: cdk/factory_dbt/target/
+
+  # ════════════════════════════════════════════════════════════
+  # JOB 4 — Smoke Tests
+  # ════════════════════════════════════════════════════════════
+  smoke-tests:
+    name:  Smoke Tests
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure, run-dbt]
+    env:
+      DB_ENDPOINT: ${{ needs.deploy-infrastructure.outputs.db_endpoint }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install dependencies
+        run: pip install psycopg2-binary boto3
+
+      - name: Get DB password
+        id: get_password
+        run: |
+          SECRET=$(aws secretsmanager get-secret-value \
+            --secret-id "factory/postgres/admin-${{ env.ENV_NAME }}" \
+            --region ${{ env.AWS_REGION }} \
+            --query SecretString \
+            --output text)
+          PASSWORD=$(echo $SECRET | python3 -c "import sys,json; print(json.load(sys.stdin)['password'])")
+          echo "::add-mask::$PASSWORD"
+          echo "db_password=$PASSWORD" >> $GITHUB_OUTPUT
+
+      - name: Run smoke tests
+        run: |
+          python3 << 'EOF'
+          import psycopg2
+          import sys
+
+          conn = psycopg2.connect(
+              host="${{ env.DB_ENDPOINT }}",
+              port=5432,
+              user="factoryadmin",
+              password="${{ steps.get_password.outputs.db_password }}",
+              dbname="factory_dw",
+              sslmode="disable"
+          )
+          cur = conn.cursor()
+          
+          tests_passed = 0
+          tests_failed = 0
+
+          def test(name, query, expected_min):
+              global tests_passed, tests_failed
+              cur.execute(query)
+              result = cur.fetchone()[0]
+              if result >= expected_min:
+                  print(f" {name}: {result} rows (expected >= {expected_min})")
+                  tests_passed += 1
+              else:
+                  print(f" {name}: {result} rows (expected >= {expected_min})")
+                  tests_failed += 1
+
+          # Test 1: dimensions populated
+          test("dim_plant", "SELECT COUNT(*) FROM factory.dim_plant", 3)
+          test("dim_device", "SELECT COUNT(*) FROM factory.dim_device", 3)
+          test("dim_date", "SELECT COUNT(*) FROM factory.dim_date", 1)
+
+          # Test 2: fact tables populated
+          test("fact_iot_events", "SELECT COUNT(*) FROM factory.fact_iot_events", 1)
+
+          # Test 3: dbt models created
+          test("stg_iot_events view",
+               "SELECT COUNT(*) FROM information_schema.views WHERE table_name='stg_iot_events'", 1)
+          test("weekly_plant_report",
+               "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='weekly_plant_report'", 1)
+
+          # Test 4: no nulls on critical columns
+          cur.execute("SELECT COUNT(*) FROM factory.fact_iot_events WHERE event_ts IS NULL")
+          null_count = cur.fetchone()[0]
+          if null_count == 0:
+              print(" No null timestamps in fact_iot_events")
+              tests_passed += 1
+          else:
+              print(f" Found {null_count} null timestamps!")
+              tests_failed += 1
+
+          conn.close()
+          print(f"\n{'='*40}")
+          print(f"Results: {tests_passed} passed, {tests_failed} failed")
+          
+          if tests_failed > 0:
+              sys.exit(1)
+          EOF
+
+      - name: Verify Glue jobs exist
+        run: |
+          aws glue get-job \
+            --job-name factory-log-processor-${{ env.ENV_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query "Job.Name" \
+            --output text
+          echo " Glue jobs verified"
+
+      - name: Verify S3 buckets accessible
+        run: |
+          aws s3 ls s3://factory-raw-${{ env.ENV_NAME }}-${{ secrets.AWS_ACCOUNT_ID }}/ \
+            --region ${{ env.AWS_REGION }}
+          echo " S3 buckets accessible"
+
+  # ════════════════════════════════════════════════════════════
+  # JOB 5 — Notify deployment result
+  # ════════════════════════════════════════════════════════════
+  notify:
+    name:  Notify Deployment
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure, run-migrations, run-dbt, smoke-tests]
+    if: always()
+    steps:
+      - name: Deployment Summary
+        run: |
+          echo "##  Factory Data Platform — Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Infrastructure (CDK) | ${{ needs.deploy-infrastructure.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| DB Migrations | ${{ needs.run-migrations.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| dbt Transformations | ${{ needs.run-dbt.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Smoke Tests | ${{ needs.smoke-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY

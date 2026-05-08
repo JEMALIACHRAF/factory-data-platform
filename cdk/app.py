@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-"""
-Factory Data Platform - AWS CDK App
-Production IoT pipeline: Kafka → S3 → Redshift + Glue processing
-"""
+import os
+from dotenv import load_dotenv
 import aws_cdk as cdk
 from stacks.network_stack import NetworkStack
 from stacks.storage_stack import StorageStack
@@ -11,23 +9,39 @@ from stacks.glue_stack import GlueStack
 from stacks.redshift_stack import RedshiftStack
 from stacks.monitoring_stack import MonitoringStack
 
+# Charge le .env depuis la racine du projet
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+
 app = cdk.App()
 
-env = cdk.Environment(
-    account=app.node.try_get_context("account"),
-    region=app.node.try_get_context("region") or "eu-west-1",
+# Lit depuis .env ou depuis les context params CDK
+account = (
+    app.node.try_get_context("account")
+    or os.getenv("AWS_ACCOUNT_ID")
+)
+region = (
+    app.node.try_get_context("region")
+    or os.getenv("AWS_REGION")
+    or "eu-west-1"
+)
+env_name = (
+    app.node.try_get_context("env")
+    or os.getenv("ENV_NAME")
+    or "prod"
+)
+alert_email = (
+    app.node.try_get_context("alert_email")
+    or os.getenv("ALERT_EMAIL")
+    or "data-team@company.com"
 )
 
-env_name = app.node.try_get_context("env") or "prod"
+env = cdk.Environment(account=account, region=region)
 
-# Layer 1 – Network
 network = NetworkStack(app, f"FactoryNetwork-{env_name}", env=env, env_name=env_name)
 
-# Layer 2 – Storage (S3 buckets, Glue catalog)
 storage = StorageStack(app, f"FactoryStorage-{env_name}", env=env, env_name=env_name)
 storage.add_dependency(network)
 
-# Layer 3 – Streaming (MSK Kafka cluster)
 streaming = StreamingStack(
     app, f"FactoryStreaming-{env_name}",
     vpc=network.vpc,
@@ -35,7 +49,6 @@ streaming = StreamingStack(
 )
 streaming.add_dependency(storage)
 
-# Layer 4 – Glue ETL jobs
 glue = GlueStack(
     app, f"FactoryGlue-{env_name}",
     raw_bucket=storage.raw_bucket,
@@ -45,7 +58,6 @@ glue = GlueStack(
 )
 glue.add_dependency(storage)
 
-# Layer 5 – Redshift warehouse
 redshift = RedshiftStack(
     app, f"FactoryRedshift-{env_name}",
     vpc=network.vpc,
@@ -54,7 +66,6 @@ redshift = RedshiftStack(
 )
 redshift.add_dependency(glue)
 
-# Layer 6 – Monitoring
 monitoring = MonitoringStack(
     app, f"FactoryMonitoring-{env_name}",
     glue_jobs=glue.job_names,
