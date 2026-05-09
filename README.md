@@ -701,8 +701,6 @@ Run the TRUNCATE block, then re-execute `01_tables_postgres_full.sql`.
 
 **Achraf Jemali** — Data & AI Engineer
 
-M2 DataScale @ Université Paris-Saclay / CentraleSupélec  
-Apprenticeship @ Capgemini SogetiLabs
 
 [![GitHub](https://img.shields.io/badge/GitHub-JEMALIACHRAF-black?logo=github)](https://github.com/JEMALIACHRAF)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Achraf_Jemali-0077B5?logo=linkedin)](https://linkedin.com/in/achraf-jemali-54a417239)
