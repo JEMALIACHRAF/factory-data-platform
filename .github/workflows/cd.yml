@@ -20,7 +20,7 @@ jobs:
   # JOB 1 — Deploy Infrastructure (CDK)
   # ════════════════════════════════════════════════════════════
   deploy-infrastructure:
-    name: 🚀 Deploy AWS Infrastructure
+    name:  Deploy AWS Infrastructure
     runs-on: ubuntu-latest
     environment: production       # require manual approval in GitHub
     outputs:
@@ -128,7 +128,7 @@ jobs:
   # JOB 2 — Run Database Migrations
   # ════════════════════════════════════════════════════════════
   run-migrations:
-    name: 🗄️ Run DB Migrations
+    name:  Run DB Migrations
     runs-on: ubuntu-latest
     needs: deploy-infrastructure
     env:
@@ -172,7 +172,7 @@ jobs:
             -d factory_dw \
             -f redshift/ddl/01_tables_postgres_full.sql \
             --set ON_ERROR_STOP=off
-          echo "✅ Migrations completed"
+          echo " Migrations completed"
 
       - name: Verify tables exist
         run: |
@@ -188,7 +188,7 @@ jobs:
   # JOB 3 — Run dbt Transformations
   # ════════════════════════════════════════════════════════════
   run-dbt:
-    name: 🔄 Run dbt Transformations
+    name:  Run dbt Transformations
     runs-on: ubuntu-latest
     needs: [deploy-infrastructure, run-migrations]
     env:
@@ -268,7 +268,7 @@ jobs:
   # JOB 4 — Smoke Tests
   # ════════════════════════════════════════════════════════════
   smoke-tests:
-    name: 🧪 Smoke Tests
+    name:  Smoke Tests
     runs-on: ubuntu-latest
     needs: [deploy-infrastructure, run-dbt]
     env:
@@ -324,10 +324,10 @@ jobs:
               cur.execute(query)
               result = cur.fetchone()[0]
               if result >= expected_min:
-                  print(f"✅ {name}: {result} rows (expected >= {expected_min})")
+                  print(f" {name}: {result} rows (expected >= {expected_min})")
                   tests_passed += 1
               else:
-                  print(f"❌ {name}: {result} rows (expected >= {expected_min})")
+                  print(f" {name}: {result} rows (expected >= {expected_min})")
                   tests_failed += 1
 
           test("dim_plant", "SELECT COUNT(*) FROM factory.dim_plant", 3)
@@ -342,10 +342,10 @@ jobs:
           cur.execute("SELECT COUNT(*) FROM factory.fact_iot_events WHERE event_ts IS NULL")
           null_count = cur.fetchone()[0]
           if null_count == 0:
-              print("✅ No null timestamps in fact_iot_events")
+              print(" No null timestamps in fact_iot_events")
               tests_passed += 1
           else:
-              print(f"❌ Found {null_count} null timestamps!")
+              print(f" Found {null_count} null timestamps!")
               tests_failed += 1
 
           conn.close()
@@ -363,26 +363,26 @@ jobs:
             --region ${{ env.AWS_REGION }} \
             --query "Job.Name" \
             --output text
-          echo "✅ Glue jobs verified"
+          echo " Glue jobs verified"
 
       - name: Verify S3 buckets accessible
         run: |
           aws s3 ls s3://factory-raw-${{ env.ENV_NAME }}-${{ secrets.AWS_ACCOUNT_ID }}/ \
             --region ${{ env.AWS_REGION }}
-          echo "✅ S3 buckets accessible"
+          echo " S3 buckets accessible"
 
   # ════════════════════════════════════════════════════════════
   # JOB 5 — Deployment Summary
   # ════════════════════════════════════════════════════════════
   notify:
-    name: 📢 Deployment Summary
+    name:  Deployment Summary
     runs-on: ubuntu-latest
     needs: [deploy-infrastructure, run-migrations, run-dbt, smoke-tests]
     if: always()
     steps:
       - name: Deployment Summary
         run: |
-          echo "## 🏭 Factory Data Platform — Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "##  Factory Data Platform — Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|------|--------|" >> $GITHUB_STEP_SUMMARY

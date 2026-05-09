@@ -15,7 +15,7 @@ jobs:
   # JOB 1 — Code Quality (lint + security)
   # ════════════════════════════════════════════════════════════
   code-quality:
-    name: 🔍 Code Quality
+    name:  Code Quality
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -63,15 +63,15 @@ jobs:
         run: |
           # Check that .env is not committed
           if git show --name-only HEAD | grep -q "^\.env$"; then
-            echo "❌ ERROR: .env file detected in commit!"
+            echo " ERROR: .env file detected in commit!"
             exit 1
           fi
           # Check for AWS keys pattern in code
           if grep -r "AKIA[0-9A-Z]{16}" --include="*.py" --include="*.json" .; then
-            echo "❌ ERROR: AWS Access Key detected in code!"
+            echo " ERROR: AWS Access Key detected in code!"
             exit 1
           fi
-          echo "✅ No hardcoded secrets found"
+          echo " No hardcoded secrets found"
 
       - name: Upload security report
         uses: actions/upload-artifact@v4
@@ -84,7 +84,7 @@ jobs:
   # JOB 2 — CDK Validate (syntax check only, no AWS calls)
   # ════════════════════════════════════════════════════════════
   cdk-validate:
-    name: 🏗️ CDK Synthesize
+    name:  CDK Synthesize
     runs-on: ubuntu-latest
     needs: code-quality
     steps:
@@ -121,7 +121,7 @@ jobs:
         run: |
           cd cdk
           python app.py
-          echo "✅ CDK Python syntax valid"
+          echo " CDK Python syntax valid"
 
       - name: Validate all stack files importable
         run: |
@@ -132,13 +132,13 @@ jobs:
           from stacks.glue_stack import GlueStack
           from stacks.redshift_stack import RedshiftStack
           from stacks.monitoring_stack import MonitoringStack
-          print('✅ All stacks importable')
+          print(' All stacks importable')
           "
   # ════════════════════════════════════════════════════════════
   # JOB 3 — dbt Validate (compile + test models)
   # ════════════════════════════════════════════════════════════
   dbt-validate:
-    name: 🔄 dbt Compile & Test
+    name:  dbt Compile & Test
     runs-on: ubuntu-latest
     needs: code-quality
 
@@ -310,7 +310,7 @@ jobs:
   # JOB 4 — SQL Validation
   # ════════════════════════════════════════════════════════════
   sql-validate:
-    name: 🗄️ SQL Validation
+    name:  SQL Validation
     runs-on: ubuntu-latest
     needs: code-quality
     steps:
@@ -328,6 +328,6 @@ jobs:
 
       - name: Check DDL files exist
         run: |
-          test -f redshift/ddl/01_tables_redshift.sql && echo "✅ Redshift DDL found"
+          test -f redshift/ddl/01_tables_redshift.sql && echo " Redshift DDL found"
           test -f redshift/ddl/01_tables_postgres.sql || \
-          test -f redshift/ddl/01_tables_postgres_full.sql && echo "✅ PostgreSQL DDL found"
+          test -f redshift/ddl/01_tables_postgres_full.sql && echo " PostgreSQL DDL found"
