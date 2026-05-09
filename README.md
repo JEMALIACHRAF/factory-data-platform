@@ -1,436 +1,699 @@
-<div align="center">
+# 🏭 Factory Data Platform
 
-<img src="https://img.shields.io/badge/Azure_Databricks-FF3621?style=for-the-badge&logo=databricks&logoColor=white"/>
-<img src="https://img.shields.io/badge/Delta_Lake-00ADD8?style=for-the-badge&logo=delta&logoColor=white"/>
-<img src="https://img.shields.io/badge/MLflow-0194E2?style=for-the-badge&logo=mlflow&logoColor=white"/>
-<img src="https://img.shields.io/badge/BigQuery-4285F4?style=for-the-badge&logo=google-cloud&logoColor=white"/>
-<img src="https://img.shields.io/badge/PySpark-E25A1C?style=for-the-badge&logo=apachespark&logoColor=white"/>
-<img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white"/>
+> **Production-grade IoT Data Pipeline on AWS**  
+> Real-time factory sensor data: ingestion → processing → analytics → dashboard
 
-# Fraud Detection Lakehouse
-### Multi-Cloud · Azure Databricks · Delta Lake · MLflow · BigQuery
-##### *150,000 transactions · 30 fraud features · 5 ML models · ROC-AUC 0.97 · Multi-cloud Azure + GCP*
-[![CI](https://github.com/JEMALIACHRAF/fraud-detection-lakehouse/actions/workflows/ci.yml/badge.svg)](https://github.com/JEMALIACHRAF/fraud-detection-lakehouse/actions/workflows/ci.yml)
+[![CI](https://github.com/JEMALIACHRAF/factory-data-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/JEMALIACHRAF/factory-data-platform/actions/workflows/ci.yml)
 [![CD](https://github.com/JEMALIACHRAF/factory-data-platform/actions/workflows/cd.yml/badge.svg)](https://github.com/JEMALIACHRAF/factory-data-platform/actions/workflows/cd.yml)
+[![Python](https://img.shields.io/badge/Python-3.11-blue)](https://python.org)
+[![AWS CDK](https://img.shields.io/badge/AWS_CDK-2.x-orange)](https://aws.amazon.com/cdk/)
+[![dbt](https://img.shields.io/badge/dbt-1.11-red)](https://getdbt.com)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
+---
 
-</div>
+## 📋 Table of Contents
+
+1. [Overview](#overview)
+2. [Architecture](#architecture)
+3. [Tech Stack](#tech-stack)
+4. [Project Structure](#project-structure)
+5. [Quick Start](#quick-start)
+6. [Prerequisites](#prerequisites)
+7. [AWS Account Setup](#aws-account-setup)
+8. [Local Setup](#local-setup)
+9. [Deploy to AWS](#deploy-to-aws)
+10. [Initialize Database](#initialize-database)
+11. [Run dbt Transformations](#run-dbt-transformations)
+12. [Connect Power BI](#connect-power-bi)
+13. [CI/CD Pipeline](#cicd-pipeline)
+14. [Performance Optimizations](#performance-optimizations)
+15. [Cost Management](#cost-management)
+16. [Troubleshooting](#troubleshooting)
+17. [Author](#author)
 
 ---
 
 ## Overview
 
-End-to-end **fraud detection data platform** for a retail bank, built on a multi-cloud architecture:
+This platform processes real-time IoT data from industrial factory machines across multiple plants. It demonstrates a complete **modern data stack** used in production environments.
 
-- **Azure Databricks** — Spark compute, Delta Lake storage, MLflow tracking
-- **Azure Blob Storage** — Bronze / Silver / Gold medallion layers
-- **Google BigQuery** — Serving layer for BI dashboards and compliance reporting
-- **Looker Studio** — Real-time fraud analytics dashboard
+**Business context:** 3 factories (Lyon, Paris, Berlin) generate thousands of sensor events per second — temperature, vibration, pressure. The platform captures, processes, and delivers clean analytical data to business dashboards.
 
-**Business impact simulated:**
-- Detect fraudulent transactions before settlement
-- Compare 5 ML models to find the best fraud detector
-- Full audit trail via Delta Lake time travel
-- Automated CI/CD pipeline via GitHub Actions
+**Key metrics achieved:**
+- Weekly report query time: **45s → 17s (-62%)** via Redshift optimization
+- Data latency: **< 15 minutes** from sensor to dashboard
+- Data quality: **automatic quarantine** of corrupt/invalid records
+- Exactly-once processing via Spark checkpointing
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        DATA SOURCES                                  │
-│   BigQuery Public Data (Chicago Taxi) + Synthetic Banking Data      │
-│                  150,000 transactions · 1.32% fraud rate            │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │  Python ingestion scripts
-                               ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│              AZURE BLOB STORAGE — Medallion Architecture            │
-│                                                                      │
-│  Bronze  wasbs://bronze@fraudlakehouse...                           │
-│  ├── JSON Lines, raw untouched data                                 │
-│  └── Partitioned by year/month/day                                  │
-│                                                                      │
-│  Silver  wasbs://silver@fraudlakehouse...  (Delta Lake)             │
-│  ├── Clean + typed + deduplicated                                   │
-│  └── MERGE upsert, partitioned by transaction_date                 │
-│                                                                      │
-│  Gold    wasbs://gold@fraudlakehouse...    (Delta Lake)             │
-│  ├── 30 fraud detection features                                    │
-│  └── Velocity · Statistical · Behavioral · Account features        │
-└──────────────────────────────┬──────────────────────────────────────┘
-                               │  Azure Databricks (PySpark)
-                    ┌──────────┴──────────┐
-                    ▼                     ▼
-         Azure Databricks            Google BigQuery
-         ├── PySpark transforms      ├── fraud_alerts (1,983 rows)
-         ├── Delta Lake ACID         ├── model_performance (13 rows)
-         ├── MLflow experiments      └── account_risk_profile (12,089)
-         └── 5 ML models                      │
-                    │                         ▼
-                    └──────────────► Looker Studio Dashboard
-```
-
-**CI/CD:**
-
-```
-Pull Request → CI (GitHub Actions)    Merge to main → CD (GitHub Actions)
-├── ruff lint                         ├── Upload src/ to Databricks Workspace
-└── pytest 17 unit tests              └── Run pipeline notebook (optional)
+IoT Devices / PLCs / Sensors
+         │
+         ▼
+  [MSK Kafka]  ──── Kafka S3 Sink Connector ────►  [S3 Raw]
+  (Streaming)         (5-min micro-batches)        landing zone
+                                                       │
+                                              ┌────────┘
+                                              ▼
+                                    [AWS Glue PySpark]
+                                    ┌──────────────────┐
+                                    │ log_processor    │  hourly
+                                    │ iot_transformer  │  15 min
+                                    └────────┬─────────┘
+                                             │
+                                    [S3 Processed]
+                                    Parquet + Snappy
+                                    Hive partitioned
+                                             │
+                                    [Glue Crawler]
+                                    [Glue Data Catalog]
+                                             │
+                                    [RDS PostgreSQL /
+                                     Redshift]
+                                    Star schema DW
+                                             │
+                                       [dbt]
+                                    Transformations
+                                    Tests + Docs
+                                             │
+                                    [Power BI Dashboard]
+                                    Plant KPIs
+                                    Machine Health
+                                    Weekly Reports
 ```
 
 ---
 
 ## Tech Stack
 
-| Layer | Tool | Version |
-|---|---|---|
-| Cloud Compute | Azure Databricks | 13.3 LTS ML |
-| Storage Format | Delta Lake | 3.0.0 |
-| Raw Storage | Azure Blob Storage | — |
-| Serving Layer | Google BigQuery | — |
-| ML Tracking | MLflow | 2.19.0 |
-| ML Models | Random Forest, XGBoost, GBM, MLP, LR | — |
-| CI/CD | GitHub Actions | — |
-| Dashboard | Looker Studio | — |
-| Language | Python 3.11 + PySpark 3.5 | — |
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| **Ingestion** | Apache Kafka (MSK) | Real-time event streaming |
+| **Storage** | Amazon S3 | Data lake (raw + processed) |
+| **Processing** | PySpark on AWS Glue 4.0 | Distributed ETL |
+| **Warehouse** | RDS PostgreSQL / Redshift | Analytical queries |
+| **Transformation** | dbt 1.11 | SQL models, tests, lineage |
+| **Visualization** | Power BI Desktop | Business dashboards |
+| **IaC** | AWS CDK Python | Infrastructure as Code |
+| **CI/CD** | GitHub Actions | Automated testing & deployment |
+| **Format** | Parquet + Snappy | Columnar storage |
+| **Security** | AWS KMS + Secrets Manager | Encryption & secrets |
+| **Monitoring** | CloudWatch + SNS | Alerts & dashboards |
 
 ---
 
 ## Project Structure
 
 ```
-fraud-detection-lakehouse/
-│
-├── src/                               # Production code
-│   ├── common/
-│   │   ├── logger.py                  # Structured JSON logging
-│   │   ├── config.py                  # Typed config loader (YAML + env vars)
-│   │   └── exceptions.py             # Custom exception hierarchy
-│   ├── ingestion/
-│   │   └── transaction_ingester.py   # PostgreSQL → Azure Blob Bronze
-│   ├── bronze_to_silver/
-│   │   └── transformer.py            # PySpark clean + Delta Lake MERGE
-│   ├── silver_to_gold/
-│   │   └── feature_engineer.py       # 30 fraud features
-│   ├── ml/
-│   │   └── trainer.py                # 5 models + MLflow + SMOTE
-│   ├── serving/
-│   │   └── bigquery_exporter.py      # Gold → BigQuery
-│   └── jobs.py                       # Databricks job entrypoints
-│
-├── scripts/                           # Infrastructure + data scripts
-│   ├── setup_azure_databricks.py     # IaC — Create Databricks workspace
-│   ├── setup_azure_storage.py        # IaC — Create Azure Blob Storage
-│   ├── setup_databricks_cluster.py   # IaC — Create cluster via SDK
-│   ├── create_databricks_notebook.py # Deploy pipeline notebook
-│   ├── upload_to_dbfs.py             # Upload src/ to Databricks
-│   ├── upload_data_to_blob.py        # Upload data to Azure Blob
-│   ├── upload_gcp_credentials.py     # Upload GCP creds to Databricks
-│   ├── extract_taxi_trips.py         # Real data from BigQuery public
-│   ├── generate_synthetic_transactions.py  # 100k synthetic transactions
-│   ├── create_bq_analytics_views.py  # IaC — 6 BigQuery views
-│   └── run_local_pipeline.py         # Full pipeline without cloud
-│
-├── tests/unit/
-│   ├── test_bronze_to_silver.py      # 12 PySpark unit tests
-│   └── test_feature_engineering.py   # 5 feature tests
-│
-├── config/
-│   ├── dev.yml                       # Dev environment
-│   └── prod.yml                      # Prod environment
+factory-data-platform/
 │
 ├── .github/workflows/
-│   ├── ci.yml                        # Lint + tests on every PR
-│   └── cd.yml                        # Deploy to Databricks (manual)
+│   ├── ci.yml              # CI: lint, security, CDK synth, dbt test
+│   └── cd.yml              # CD: deploy AWS, migrations, dbt run, smoke tests
 │
-├── .env.example                      # Environment variables template
+├── cdk/                    # AWS CDK Infrastructure (Python)
+│   ├── app.py              # Entry point — reads .env
+│   ├── cdk.json            # CDK configuration
+│   ├── requirements.txt    # Python dependencies
+│   └── stacks/
+│       ├── network_stack.py    # VPC, subnets, NAT Gateway
+│       ├── storage_stack.py    # S3 buckets, KMS, Glue catalog
+│       ├── glue_stack.py       # Glue jobs, crawlers, triggers
+│       ├── redshift_stack.py   # RDS PostgreSQL / Redshift
+│       ├── streaming_stack.py  # MSK Kafka cluster
+│       └── monitoring_stack.py # CloudWatch alarms, dashboard
+│
+├── glue_jobs/              # PySpark ETL Scripts
+│   ├── log_processor.py    # Batch: JSON logs → Parquet
+│   └── iot_transformer.py  # Streaming: IoT events → enriched Parquet
+│
+├── redshift/
+│   ├── ddl/
+│   │   ├── 01_tables_redshift.sql       # Production DDL (Redshift)
+│   │   ├── 01_tables_postgres.sql       # Dev DDL (PostgreSQL)
+│   │   └── 01_tables_postgres_full.sql  # Dev DDL + seed data
+│   └── queries/
+│       └── weekly_report_optimized.sql  # -62% optimization (before/after)
+│
+├── cdk/factory_dbt/        # dbt Project
+│   ├── models/
+│   │   ├── staging/
+│   │   │   ├── stg_iot_events.sql       # Clean IoT events
+│   │   │   ├── sources.yml              # Source declarations
+│   │   │   └── schema.yml               # Column tests
+│   │   └── marts/
+│   │       ├── weekly_plant_report.sql  # Weekly KPIs per plant
+│   │       └── fact_iot_incremental.sql # Incremental load model
+│   └── dbt_project.yml
+│
+├── kafka/
+│   └── s3_sink_connector.json  # Kafka Connect S3 Sink config
+│
+├── .env.example            # Environment variables template
+├── .flake8                 # Python linting config
+├── load_env.ps1            # Windows: load .env into session
 └── README.md
 ```
 
 ---
 
-## ML Results — 5 Models Comparison
+## Quick Start
 
-| Model | ROC-AUC | Avg Precision | F1 | Recall | Precision |
-|---|---|---|---|---|---|
-| **Random Forest** ✓ | **0.9734** | **0.6765** | **0.701** | 0.586 | 0.872 |
-| XGBoost | 0.9663 | 0.6630 | 0.238 | 0.810 | 0.139 |
-| Gradient Boosting | 0.9617 | 0.6299 | 0.197 | 0.787 | 0.113 |
-| Neural Network (128-64-32) | 0.7790 | 0.5623 | 0.634 | 0.558 | 0.735 |
-| Logistic Regression | 0.7883 | 0.1039 | 0.056 | 0.644 | 0.029 |
-
-**Random Forest wins** — best F1 (0.70) and highest precision (0.87): 87% of fraud alerts are confirmed fraud, minimizing costly false positives for analysts.
-
-All 5 models tracked in MLflow with hyperparameters, metrics, feature importance, and model signatures registered in Unity Catalog.
-
----
-
-## Feature Engineering — 30 Fraud Signals
-
-### Velocity (sliding windows)
-
-| Feature | Window | Fraud Signal |
-|---|---|---|
-| `tx_count_24h` | 24h | Card testing — many transactions in one day |
-| `tx_amount_24h` | 24h | High cumulative amount in one day |
-| `tx_count_7d` | 7 days | Abnormal weekly volume |
-| `tx_amount_7d` | 7 days | Weekly spending anomaly |
-
-### Statistical (30-day rolling)
-
-| Feature | Description |
-|---|---|
-| `amount_mean_30d` | Average transaction amount for this account |
-| `amount_std_30d` | Volatility of amounts |
-| `amount_zscore` | **(amount - mean) / std** — key anomaly signal |
-
-### Behavioral
-
-| Feature | Description |
-|---|---|
-| `is_night_transaction` | Between 23:00 and 05:00 |
-| `is_weekend` | Saturday or Sunday |
-| `time_since_last_tx_seconds` | Time gap from previous — card testing signal |
-
----
-
-## Setup Guide
-
-### Prerequisites
-
-- Python 3.11+
-- Azure account — [free $200 credit](https://azure.microsoft.com/free)
-- GCP account with BigQuery enabled — [free tier](https://cloud.google.com/free)
-- Azure CLI + Google Cloud SDK installed
-
-### Step 1 — Clone and install
+> ⚡ For experienced users — full guide below
 
 ```bash
-git clone https://github.com/JEMALIACHRAF/fraud-detection-lakehouse
-cd fraud-detection-lakehouse
+# 1. Clone
+git clone https://github.com/JEMALIACHRAF/factory-data-platform.git
+cd factory-data-platform
 
-python -m venv venv
-source venv/bin/activate      # Mac/Linux
-# venv\Scripts\activate       # Windows
+# 2. Setup environment
+cp .env.example .env
+# Edit .env with your AWS credentials
 
+# 3. Install dependencies
+cd cdk
 pip install -r requirements.txt
+npm install -g aws-cdk
+
+# 4. Deploy to AWS
+cdk bootstrap aws://YOUR_ACCOUNT_ID/eu-west-1
+cdk deploy FactoryNetwork-prod FactoryStorage-prod FactoryGlue-prod FactoryRedshift-prod FactoryMonitoring-prod
+
+# 5. Initialize database (in DBeaver)
+# Run: redshift/ddl/01_tables_postgres_full.sql
+
+# 6. Run dbt
+cd factory_dbt
+dbt run && dbt test
 ```
 
-### Step 2 — Configure credentials
+---
+
+## Prerequisites
+
+### Tools to install
+
+| Tool | Install command / Link |
+|------|----------------------|
+| Python 3.10+ | [python.org](https://python.org) |
+| Node.js 18+ | [nodejs.org](https://nodejs.org) |
+| AWS CLI | `winget install Amazon.AWSCLI` |
+| AWS CDK | `npm install -g aws-cdk` |
+| Git | [git-scm.com](https://git-scm.com) |
+| DBeaver Community | [dbeaver.io/download](https://dbeaver.io/download/) |
+| Power BI Desktop | [powerbi.microsoft.com/desktop](https://powerbi.microsoft.com/desktop) |
+
+---
+
+## AWS Account Setup
+
+### 1. Create IAM Admin User (never use root)
+
+```
+AWS Console → IAM → Users → Create user
+  Username: achraf-admin
+  Permissions: AdministratorAccess
+
+Security credentials tab → Create access key
+  Use case: CLI
+  → Download CSV immediately (secret shown only once)
+```
+
+### 2. Configure AWS CLI
+
+```bash
+aws configure
+```
+
+```
+AWS Access Key ID:     AKIA...
+AWS Secret Access Key: xxxx...
+Default region:        eu-west-1
+Output format:         json
+```
+
+### 3. Verify
+
+```bash
+aws sts get-caller-identity
+# Must return your Account ID
+```
+
+---
+
+## Local Setup
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/JEMALIACHRAF/factory-data-platform.git
+cd factory-data-platform
+```
+
+### 2. Configure environment variables
 
 ```bash
 cp .env.example .env
 ```
 
 Edit `.env` with your values:
-
 ```env
-# Azure
-AZURE_SUBSCRIPTION_ID=your-subscription-id
-AZURE_STORAGE_ACCOUNT=fraudlakehouse
-AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
+AWS_ACCOUNT_ID=YOUR_ACCOUNT_ID
+AWS_REGION=eu-west-1
+ENV_NAME=prod
+ALERT_EMAIL=your@email.com
 
-# Databricks
-DATABRICKS_HOST=https://adb-xxxx.azuredatabricks.net
-DATABRICKS_TOKEN=dapi_xxxx
-DATABRICKS_CLUSTER_ID=xxxx-xxxxxx-xxxxxxxx
-
-# GCP
-GCP_PROJECT_ID=your-gcp-project-id
+# Fill these after RDS deployment (Step: Get RDS credentials)
+DB_HOST=YOUR_RDS_ENDPOINT
+DB_PORT=5432
+DB_NAME=factory_dw
+DB_USER=factoryadmin
+DB_PASSWORD=YOUR_PASSWORD
 ```
 
-Authenticate:
+> ⚠️ `.env` is in `.gitignore` — **never commit it**
 
-```bash
-az login
-gcloud auth application-default login
-```
-
-### Step 3 — Provision Azure infrastructure
-
-```bash
-# Create Databricks workspace (~10 min)
-python scripts/setup_azure_databricks.py
-
-# Create Azure Blob Storage (Bronze/Silver/Gold containers)
-python scripts/setup_azure_storage.py
-```
-
-### Step 4 — Generate and upload data
-
-```bash
-# Generate 100k synthetic banking transactions with fraud patterns
-python scripts/generate_synthetic_transactions.py --rows 100000 --output-dir data
-
-# Extract 50k real transactions from BigQuery public dataset
-python scripts/extract_taxi_trips.py --project your-gcp-project-id --limit 50000
-
-# Upload everything to Azure Blob Storage
-python scripts/upload_data_to_blob.py
-```
-
-### Step 5 — Deploy to Databricks
-
-```bash
-# Upload source code to Databricks Workspace
-python scripts/upload_to_dbfs.py
-
-# Upload GCP credentials (for BigQuery export)
-python scripts/upload_gcp_credentials.py
-
-# Create pipeline notebook on Databricks
-python scripts/create_databricks_notebook.py
-```
-
-### Step 6 — Run pipeline on Databricks
-
-Open your Databricks workspace and navigate to:
-```
-Workspace → Users → your@email.com → fraud-pipeline → pipeline_notebook
-```
-
-Attach cluster and run cells in order:
-
-| Cell | Action | Output |
-|---|---|---|
-| 0 | `%pip install` dependencies | Libraries installed |
-| 1 | Configure Azure + GCP paths | Paths confirmed |
-| 2 | Read Bronze | 150,000 rows loaded |
-| 3 | Bronze → Silver | Delta Lake written |
-| 4 | Silver → Gold | 30 features computed |
-| 5 | Train 5 ML models | MLflow experiments logged |
-| 6 | MLflow dashboard | Comparison table |
-| 7 | Delta Lake time travel | History displayed |
-| 8 | Export to BigQuery | 3 tables written |
-
-### Step 7 — Create BigQuery views and dashboard
-
-```bash
-# Create 6 analytical views (IaC)
-python scripts/create_bq_analytics_views.py
-```
-
-Connect Looker Studio to BigQuery:
-```
-https://lookerstudio.google.com/
-→ Create → Report → BigQuery → projet-xxx → fraud_detection
-```
-
----
-
-## Run Locally (No Cloud Required)
-
-```bash
-# Windows setup — download Hadoop utilities
-mkdir C:\hadoop\bin
-curl -L -o C:\hadoop\bin\winutils.exe https://github.com/cdarlint/winutils/raw/master/hadoop-3.3.5/bin/winutils.exe
-curl -L -o C:\hadoop\bin\hadoop.dll https://github.com/cdarlint/winutils/raw/master/hadoop-3.3.5/bin/hadoop.dll
-
-# Generate data
-python scripts/generate_synthetic_transactions.py --rows 100000 --output-dir data
-
-# Run full pipeline (Bronze → Silver → Gold → ML → Parquet)
-set PYSPARK_PYTHON=path\to\python.exe    # Windows
-set HADOOP_HOME=C:\hadoop                # Windows
-python scripts/run_local_pipeline.py --data-dir data
-
-# Open MLflow UI
-mlflow ui --backend-store-uri file:///absolute/path/to/mlflow_runs
-# Navigate to http://localhost:5000
-```
-
----
-
-## Unit Tests
+### 3. Python virtual environment
 
 ```bash
 # Windows
-set PYSPARK_PYTHON=path\to\python.exe
+cd cdk
+python -m venv .venv
+.venv\Scripts\activate
 
-# Run 17 unit tests
-pytest tests/unit/ -v
-
-# Expected: 17 passed
+# macOS / Linux
+python3 -m venv .venv
+source .venv/bin/activate
 ```
 
-Tests cover: deduplication, type normalization, null handling, negative amounts, behavioral features, account aggregates.
+### 4. Install dependencies
 
----
-
-## CI/CD
-
-### CI — every Pull Request
-
-```yaml
-Trigger: pull_request → main
-Steps:
-  1. ruff lint (src/)
-  2. pytest tests/unit/ (17 tests)
-  3. coverage report
+```bash
+pip install -r requirements.txt
+pip install dbt-postgres python-dotenv
+npm install -g aws-cdk
 ```
 
-### CD — manual trigger
+### 5. Verify setup
 
-```yaml
-Trigger: workflow_dispatch (manual)
-Input: run_pipeline (true/false)
-Steps:
-  1. Upload src/ + config/ + scripts/ to Databricks Workspace
-  2. (optional) Run pipeline notebook on cluster
-```
-
-**To trigger CD:**
-1. Go to **Actions** tab → **"CD — Deploy to Azure Databricks"**
-2. Click **"Run workflow"**
-3. Choose `run_pipeline: false` (deploy only) or `true` (deploy + run)
-
-**Required GitHub Secrets:**
-
-```
-DATABRICKS_HOST        → https://adb-xxxx.azuredatabricks.net
-DATABRICKS_TOKEN       → dapi_xxxx
-DATABRICKS_CLUSTER_ID  → xxxx-xxxxxx-xxxxxxxx
+```bash
+python app.py
+# No output = success (CDK reads .env correctly)
 ```
 
 ---
 
-## Delta Lake Features Used
+## Deploy to AWS
 
-```python
-# MERGE upsert — idempotent, safe to re-run
-delta_table.alias("silver").merge(
-    df.alias("updates"),
-    "silver.transaction_id = updates.transaction_id"
-).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
+> ⚠️ **Cost warning:** ~$1.56/day while running.  
+> **Always destroy after testing.** See [Cost Management](#cost-management).
 
-# Time travel — read data as of any past version
-df_v0 = spark.read.format("delta") \
-    .option("versionAsOf", 0) \
-    .load(SILVER_PATH)
+### Step 1 — Bootstrap (one-time per account/region)
 
-# Partitioning + Z-ordering — reduce query cost by ~70%
-df.write.format("delta") \
-    .partitionBy("transaction_date") \
-    .save(SILVER_PATH)
+```bash
+cdk bootstrap aws://YOUR_ACCOUNT_ID/eu-west-1
+```
+
+Expected: `✅ Environment bootstrapped`
+
+### Step 2 — Deploy stacks
+
+```bash
+cdk deploy FactoryNetwork-prod \
+           FactoryStorage-prod \
+           FactoryGlue-prod \
+           FactoryRedshift-prod \
+           FactoryMonitoring-prod
+```
+
+Type `y` when prompted for IAM/security changes. Duration: ~20 min.
+
+### Step 3 — Get RDS credentials
+
+```bash
+# Get endpoint
+aws cloudformation describe-stacks \
+  --stack-name FactoryRedshift-prod \
+  --region eu-west-1 \
+  --query "Stacks[0].Outputs[?OutputKey=='DBEndpoint'].OutputValue" \
+  --output text
+
+# Get password (Windows CMD — use ^ not backtick)
+aws secretsmanager get-secret-value ^
+  --secret-id "factory/postgres/admin-prod" ^
+  --region eu-west-1 ^
+  --query SecretString ^
+  --output text
+```
+
+Update your `.env` with these values.
+
+### What gets deployed
+
+| Stack | AWS Resources |
+|-------|--------------|
+| `FactoryNetwork-prod` | VPC 10.0.0.0/16, 4 subnets, NAT Gateway |
+| `FactoryStorage-prod` | 3 S3 buckets, KMS key, Glue Data Catalog |
+| `FactoryGlue-prod` | 2 PySpark jobs, crawler, CRON triggers |
+| `FactoryRedshift-prod` | RDS PostgreSQL 16.6, Secrets Manager, IAM role |
+| `FactoryMonitoring-prod` | 4 CloudWatch alarms, SNS alerts, dashboard |
+
+---
+
+## Initialize Database
+
+### Connect with DBeaver
+
+```
+New Connection → PostgreSQL
+  Host:     YOUR_RDS_ENDPOINT
+  Port:     5432
+  Database: factory_dw
+  Username: factoryadmin
+  Password: YOUR_PASSWORD
+```
+
+Click **Test Connection** → **Connected ✅** → **Finish**
+
+### Run DDL
+
+1. **SQL Editor → Open File** → `redshift/ddl/01_tables_postgres_full.sql`
+2. **Ctrl+Alt+X** (Execute All Statements)
+
+### Verify tables
+
+```sql
+SELECT 'dim_plant' AS t, COUNT(*) FROM factory.dim_plant
+UNION ALL SELECT 'dim_device',      COUNT(*) FROM factory.dim_device
+UNION ALL SELECT 'dim_date',        COUNT(*) FROM factory.dim_date
+UNION ALL SELECT 'fact_iot_events', COUNT(*) FROM factory.fact_iot_events
+UNION ALL SELECT 'fact_machine_logs',COUNT(*) FROM factory.fact_machine_logs;
+```
+
+Expected:
+```
+dim_date            10
+dim_device           3
+dim_plant            3
+fact_iot_events     60
+fact_machine_logs   10
+```
+
+> If counts are wrong, run the TRUNCATE block first:
+> ```sql
+> TRUNCATE factory.fact_iot_events CASCADE;
+> TRUNCATE factory.fact_machine_logs CASCADE;
+> TRUNCATE factory.dim_date CASCADE;
+> TRUNCATE factory.dim_plant CASCADE;
+> TRUNCATE factory.dim_device CASCADE;
+> DROP MATERIALIZED VIEW IF EXISTS reporting.mv_hourly_plant_kpis;
+> ```
+> Then re-execute `01_tables_postgres_full.sql`.
+
+---
+
+## Run dbt Transformations
+
+### 1. Load environment variables
+
+```bash
+# Windows CMD
+SET DB_HOST=YOUR_RDS_ENDPOINT
+SET DB_PORT=5432
+SET DB_NAME=factory_dw
+SET DB_USER=factoryadmin
+SET DB_PASSWORD=YOUR_PASSWORD
+
+# Windows PowerShell
+.\load_env.ps1
+```
+
+### 2. Run dbt
+
+```bash
+cd cdk/factory_dbt
+
+dbt debug              # test connection
+dbt run                # execute all models
+dbt test               # run data quality tests
+dbt docs generate      # build documentation
+dbt docs serve         # open http://localhost:8080
+```
+
+### 3. Expected results
+
+```
+✅ stg_iot_events         VIEW  — standardized IoT events
+✅ weekly_plant_report    TABLE — 19 rows weekly KPIs
+✅ fact_iot_incremental   TABLE — incremental load
+```
+
+### 4. Model lineage
+
+```
+source: fact_iot_events + dim_plant
+              │
+        stg_iot_events (view)
+              │
+    ┌─────────┴────────────┐
+    ▼                      ▼
+weekly_plant_report   fact_iot_incremental
+     (table)               (table)
+```
+
+> If `weekly_plant_report` returns 0 rows, check the date filter in `models/marts/weekly_plant_report.sql`:
+> ```sql
+> WHERE event_ts >= '2024-01-01'   -- use this for test data
+> ```
+
+---
+
+## Connect Power BI
+
+### 1. Install PostgreSQL ODBC driver
+
+Download from: [postgresql.org/ftp/odbc/versions/msi](https://www.postgresql.org/ftp/odbc/versions/msi/)  
+Install: `psqlodbc_16_00_0000-x64.zip`
+
+### 2. Fix SSL (run PowerShell as Administrator)
+
+```powershell
+Invoke-WebRequest `
+  -Uri "https://truststore.pki.rds.amazonaws.com/eu-west-1/eu-west-1-bundle.pem" `
+  -OutFile "cert.pem"
+
+Import-Certificate -FilePath "cert.pem" -CertStoreLocation Cert:\LocalMachine\Root
+```
+
+### 3. Connect
+
+```
+Get Data → PostgreSQL database
+  Server:   YOUR_RDS_ENDPOINT
+  Database: factory_dw
+  Mode:     Import
+  (Advanced options: leave empty)
+```
+
+Credentials → Database tab:
+```
+Username: factoryadmin
+Password: YOUR_PASSWORD
+```
+
+### 4. Select tables
+
+```
+✅ factory.fact_iot_events
+✅ factory.fact_machine_logs
+✅ factory.dim_plant
+✅ factory.dim_device
+✅ factory.dim_date
+✅ factory.weekly_plant_report
+```
+
+### 5. Dashboard structure (3 pages)
+
+**Page 1 — Plant KPIs Overview**
+- 4 KPI Cards: Total Events, Total Alarms, Alarm Rate %, Avg Quality
+- Bar chart: Events by plant
+- Line chart: Temperature trend over time
+- Slicer: Date range, Plant
+
+**Page 2 — Machine Health**
+- Line chart: Temperature by device over time
+- Table: Top 5 hottest machines
+- Scatter: Threshold breaches (red = breach)
+- Slicer: Event type (TEMPERATURE/VIBRATION/PRESSURE)
+
+**Page 3 — Weekly Report**
+- KPI Cards: This week vs last week alarms (WoW delta)
+- Line chart: Alarm trend last 8 weeks
+- Table: Plant performance (events, alarms, rate%, SLA status)
+- Conditional formatting: alarm_rate > 1% = red, < 1% = green
+
+---
+
+## CI/CD Pipeline
+
+### Workflow overview
+
+```
+git push (any branch)
+      │
+      ▼
+CI Pipeline (automatic)
+  🔍 Code Quality    flake8 + bandit + secret scan
+  🏗️ CDK Synthesize  validate infra templates
+  🔄 dbt Test        spin up PostgreSQL, compile + test models
+  🗄️ SQL Lint        sqlfluff validation
+
+git push main only
+      │
+      ▼
+CD Pipeline (requires manual approval)
+  🚀 CDK Deploy      all 5 stacks to AWS
+  🗄️ DB Migrations   run DDL
+  🔄 dbt Run         execute transformations
+  🧪 Smoke Tests     verify deployment
+  📢 Summary         deployment report
+```
+
+### Setup GitHub Secrets
+
+```
+Repository → Settings → Secrets and variables → Actions → New repository secret
+```
+
+| Secret Name | Value |
+|-------------|-------|
+| `AWS_ACCESS_KEY_ID` | Your IAM access key (AKIA...) |
+| `AWS_SECRET_ACCESS_KEY` | Your IAM secret key |
+| `AWS_ACCOUNT_ID` | Your AWS account ID |
+| `ALERT_EMAIL` | Email for deployment alerts |
+
+### Setup production environment (manual approval gate)
+
+```
+Repository → Settings → Environments → New environment
+  Name: production
+  ✅ Required reviewers: YOUR_GITHUB_USERNAME
+  Save protection rules
 ```
 
 ---
 
-## Why Multi-Cloud?
+## Performance Optimizations
+
+### SQL query optimization (-62% on weekly report)
+
+| Technique | Impact |
+|-----------|--------|
+| Materialized View for hourly KPIs | Avoids full fact scan on every report |
+| SORTKEY + zone map pruning | Irrelevant disk blocks skipped |
+| `APPROXIMATE COUNT DISTINCT` (HyperLogLog) | 10x faster, ±2% error |
+| Window functions vs correlated subqueries | O(N) instead of O(N²) |
+| WLM queue separation (BI vs ETL) | No query contention |
+
+**Result: 45s → 17s on 500M row fact table**
+
+### PySpark best practices applied
+
+| Pattern | Why |
+|---------|-----|
+| Job bookmarks | Idempotent — no duplicates on retry |
+| AQE (Adaptive Query Execution) | Dynamic partition coalescing |
+| Kryo serializer | 2x faster than Java default |
+| `foreachBatch` in streaming | Exactly-once guarantee |
+| Broadcast join for device registry | Eliminates shuffle network cost |
+
+### S3 lifecycle (storage cost optimization)
 
 ```
-Azure Databricks          Google BigQuery
-──────────────────────    ─────────────────────────────
-Best Spark managed        Best serverless SQL engine
-Delta Lake native         Looker Studio native
-MLflow integrated         Free tier 1TB/month
-$200 Azure free credit    Free tier 10GB storage
-
-Common in European banks: Microsoft stack for compute,
-Google for analytics — both coexist in most large enterprises.
+0-30d   Standard          $0.023/GB
+30-90d  Standard-IA       $0.0125/GB
+90-365d Glacier Instant   $0.004/GB
+365d+   Deep Archive      $0.00099/GB
 ```
+
+---
+
+## Cost Management
+
+### Estimated costs (eu-west-1, dev)
+
+| Resource | Daily | Monthly |
+|----------|-------|---------|
+| NAT Gateway | ~$1.08 | ~$33 |
+| RDS t3.micro | ~$0.48 | ~$15 |
+| S3 (nearly empty) | ~$0.00 | ~$0 |
+| Glue (idle) | ~$0.00 | ~$0 |
+| **Total** | **~$1.56** | **~$48** |
+
+### Destroy when done
+
+```bash
+cdk destroy FactoryNetwork-prod \
+            FactoryStorage-prod \
+            FactoryGlue-prod \
+            FactoryRedshift-prod \
+            FactoryMonitoring-prod
+```
+
+S3 buckets are retained (data protection). Delete manually:
+```bash
+aws s3 rb s3://factory-raw-prod-ACCOUNT_ID --force
+aws s3 rb s3://factory-processed-prod-ACCOUNT_ID --force
+aws s3 rb s3://factory-scripts-prod-ACCOUNT_ID --force
+```
+
+---
+
+## Troubleshooting
+
+### `python3 not found` on Windows
+In `cdk/cdk.json`, change `"app": "python3 app.py"` to `"app": "python app.py"`
+
+### CDK bootstrap fails
+Run `aws sts get-caller-identity` — must return your Account ID with no errors.
+
+### `SubscriptionRequiredException` for Redshift or MSK
+Not available on all account types. Use RDS PostgreSQL (same SQL, already configured in `redshift_stack.py`).
+
+### dbt `Env var required but not provided: DB_HOST`
+Load variables before running dbt:
+```bash
+# Windows CMD
+SET DB_HOST=YOUR_ENDPOINT
+SET DB_PASSWORD=YOUR_PASSWORD
+# ... other vars
+dbt run
+```
+
+### Power BI SSL certificate error
+Install the RDS certificate (see [Connect Power BI](#connect-power-bi) → Step 2).
+
+### `weekly_plant_report` returns 0 rows
+The date filter excludes test data. Edit `models/marts/weekly_plant_report.sql`:
+```sql
+WHERE event_ts >= '2024-01-01'
+```
+Then: `dbt run --select weekly_plant_report`
+
+### Glue job FAILED
+```bash
+aws glue get-job-runs \
+  --job-name factory-log-processor-prod \
+  --region eu-west-1 \
+  --query "JobRuns[0].{Status:JobRunState,Error:ErrorMessage}"
+```
+
+### Tables exist but data is wrong (DBeaver shows old counts)
+Run the TRUNCATE block, then re-execute `01_tables_postgres_full.sql`.
 
 ---
 
@@ -445,3 +708,4 @@ Google for analytics — both coexist in most large enterprises.
 ---
 
 *MIT License — contributions welcome*
+
