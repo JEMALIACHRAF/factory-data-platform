@@ -50,41 +50,9 @@ This platform processes real-time IoT data from industrial factory machines acro
 
 ## Architecture
 
-```
-IoT Devices / PLCs / Sensors
-         │
-         ▼
-  [MSK Kafka]  ──── Kafka S3 Sink Connector ────►  [S3 Raw]
-  (Streaming)         (5-min micro-batches)        landing zone
-                                                       │
-                                              ┌────────┘
-                                              ▼
-                                    [AWS Glue PySpark]
-                                    ┌──────────────────┐
-                                    │ log_processor    │  hourly
-                                    │ iot_transformer  │  15 min
-                                    └────────┬─────────┘
-                                             │
-                                    [S3 Processed]
-                                    Parquet + Snappy
-                                    Hive partitioned
-                                             │
-                                    [Glue Crawler]
-                                    [Glue Data Catalog]
-                                             │
-                                    [RDS PostgreSQL /
-                                     Redshift]
-                                    Star schema DW
-                                             │
-                                       [dbt]
-                                    Transformations
-                                    Tests + Docs
-                                             │
-                                    [Power BI Dashboard]
-                                    Plant KPIs
-                                    Machine Health
-                                    Weekly Reports
-```
+<p align="center">
+  <img src="docs/architecture.png" alt="Factory Data Platform Architecture" width="900"/>
+</p>
 
 ---
 
